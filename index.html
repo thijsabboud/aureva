@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aureva — Agentic SEO/GEO Pipeline · Overview</title>
+<style>
+* { box-sizing: border-box; margin: 0; }
+:root {
+  --bg: #0e1116; --panel: #161b23; --panel2: #1d242f; --line: #2a3341;
+  --text: #dbe2ec; --dim: #8b96a5; --accent: #d4a24c; --accent2: #4c9ed4;
+  --ok: #3fae6a; --warn: #d4884c; --bad: #d45050;
+}
+body { background: var(--bg); color: var(--text); font: 15px/1.65 -apple-system, "Segoe UI", sans-serif; }
+.wrap { max-width: 900px; margin: 0 auto; padding: 48px 24px 80px; }
+.kicker { color: var(--accent); letter-spacing: 3px; font-size: 12px; font-weight: 700; }
+h1 { font-size: 34px; line-height: 1.2; margin: 10px 0 14px; }
+h2 { font-size: 20px; margin: 44px 0 12px; color: var(--accent); }
+h3 { font-size: 15px; margin: 16px 0 6px; }
+p.lead { font-size: 17px; color: var(--dim); max-width: 640px; }
+p { margin: 8px 0; }
+.dim { color: var(--dim); }
+a { color: var(--accent2); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.cta { display: inline-block; background: var(--accent); color: #14100a; font-weight: 700; padding: 12px 22px; border-radius: 8px; margin: 18px 12px 0 0; }
+.cta.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+.flow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 18px 0; }
+.flow .stage { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; font-weight: 600; font-size: 13px; }
+.flow .stage small { display: block; font-weight: 400; color: var(--dim); font-size: 11px; }
+.flow .arrow { color: var(--dim); }
+.flow .gate { color: var(--warn); font-size: 11px; border: 1px dashed var(--warn); border-radius: 8px; padding: 8px 10px; }
+.loopnote { color: var(--dim); font-size: 13px; border-left: 3px solid var(--accent2); padding-left: 12px; margin: 14px 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin: 16px 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+.card .n { color: var(--accent); font-weight: 700; font-size: 12px; }
+.card h3 { margin: 4px 0 8px; }
+.card p { font-size: 13px; color: var(--dim); margin: 0; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; margin: 14px 0; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+th { color: var(--dim); font-weight: 500; font-size: 12px; }
+code, .mono { font-family: ui-monospace, monospace; font-size: 13px; color: var(--accent2); }
+pre { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; overflow: auto; font-size: 13px; color: var(--text); }
+.badge { display: inline-block; padding: 1px 9px; border-radius: 10px; font-size: 11px; border: 1px solid var(--accent2); color: var(--accent2); margin-right: 6px; }
+.footer { margin-top: 60px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--dim); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="kicker">AUREVA · BACKEND PIPELINE PROTOTYPE · v1.1</div>
+  <h1>Eight agents that take a client from onboarding to AI citations — and never stop.</h1>
+  <p class="lead">A working prototype of the full agentic SEO/GEO pipeline: baseline audit, research,
+  briefing, writing, quality gating, hidden-post publishing with a symmetry gate, citation and
+  whitespace monitoring, and continuous optimization — with human oversight at the points that matter
+  and a full audit trail per client.</p>
+  <a class="cta" href="demo.html">Open the interactive demo →</a>
+  <a class="cta ghost" href="#how">How it works</a>
+
+  <h2 id="how">The pipeline</h2>
+  <div class="flow">
+    <span class="stage">0 · Baseline<small>pre-engagement audit</small></span>
+    <span class="arrow">→</span>
+    <span class="stage">1 · Research<small>opportunities</small></span>
+    <span class="gate">⏸ specialist approves plan</span>
+    <span class="arrow">→</span>
+    <span class="stage">2 · Brief<small>per-article specs</small></span>
+    <span class="arrow">→</span>
+    <span class="stage">3 · Writer<small>GEO-ready drafts</small></span>
+    <span class="arrow">⇄</span>
+    <span class="stage">4 · Quality<small>score &amp; gate</small></span>
+    <span class="gate">⏸ optional client review</span>
+    <span class="arrow">→</span>
+    <span class="stage">5 · Publish<small>symmetry gate · hidden post</small></span>
+    <span class="arrow">→</span>
+    <span class="stage">6 · Monitor<small>citations · whitespace</small></span>
+    <span class="gate">⏸ specialist approves report</span>
+    <span class="arrow">→</span>
+    <span class="stage">7 · Optimize<small>fix &amp; refresh</small></span>
+  </div>
+  <p class="loopnote">Optimize feeds newly discovered content gaps <strong>and citation-whitespace queries</strong>
+  back to Research — the loop runs monthly, indefinitely. Below-threshold drafts bounce between Quality
+  and Writer up to a configurable number of attempts, then escalate to a human. Articles publish as
+  <strong>hidden posts</strong> — live URLs discoverable only via the clustered sitemap and llms.txt — until
+  they cross a traffic threshold and the client chooses to make them publicly visible. Every action
+  lands in the per-client audit log.</p>
+
+  <h2>What each agent does</h2>
+  <div class="grid">
+    <div class="card"><div class="n">AGENT 0 · NEW</div><h3>Baseline audit</h3><p>Runs automatically at onboarding, before any engagement: scores every existing page for citability, flags JS-rendered and orphaned content, scans the legacy corpus for contradictions, records who each AI engine cites today per query (client, competitor or nobody), and audits robots.txt. The before/after evidence base.</p></div>
+    <div class="card"><div class="n">AGENT 1</div><h3>Research</h3><p>Keyword expansion, conversational long-tail discovery, competitor gap analysis, AI-intent mapping and a hub-and-spoke topical map. Long-tail first is enforced; citation-whitespace queries get a priority bonus. Output: a prioritized monthly content plan (8–12 articles), with corpus contradictions flagged.</p></div>
+    <div class="card"><div class="n">AGENT 2</div><h3>Brief</h3><p>One brief per planned article: target keywords with fan-out queries, word count, heading structure, internal link targets tagged by cluster (spokes → pillar, pillar → spokes), schema type, competing URLs and a Unique Information Delta directive.</p></div>
+    <div class="card"><div class="n">AGENT 3</div><h3>Writer</h3><p>Long-form drafts built for citation: a direct answer in the first 150 words, named entities, sourced facts, a mandatory FAQ, JSON-LD schema, 2,000+ words — and <strong>semantic relationship links</strong>: every internal link carries a conceptual bridge explaining how the two pieces relate. Rewrites target the exact criteria Quality failed.</p></div>
+    <div class="card"><div class="n">AGENT 4</div><h3>Quality</h3><p>Scores every draft 0–100 against the Signal Clarity rubric v2 below (weights configurable per client). Bare links are a hard fail regardless of score. Runs a contradiction check against the live corpus — severe conflicts block the draft. Still failing after max attempts → escalated with one-click resolution.</p></div>
+    <div class="card"><div class="n">AGENT 5</div><h3>Publish</h3><p>Verifies robots.txt allows all six AI crawlers (GPTBot, ClaudeBot, PerplexityBot, Googlebot, Gemini-Bot, Bingbot), enforces the <strong>symmetry gate</strong> (JSON-LD must exactly match the rendered page), publishes as a hidden post, requires a plugin webhook confirmation, verifies the live page renders as static HTML, regenerates the clustered sitemap + llms.txt, pings IndexNow and Search Console.</p></div>
+    <div class="card"><div class="n">AGENT 6</div><h3>Monitor</h3><p>Weekly per-keyword rankings, GA4 traffic, AI-bot crawls and per-engine citation status — plus <strong>query ownership</strong>: who each engine cites for every target query, surfacing whitespace where nobody is cited. Tracks hidden-post traffic against the visitor threshold and raises client visibility notifications.</p></div>
+    <div class="card"><div class="n">AGENT 7</div><h3>Optimize</h3><p>Rewrites intros, extends FAQs, reinforces internal links and refreshes facts on flagged pages, republishes them, and feeds new content gaps and whitespace queries back to Research — closing the loop.</p></div>
+    <div class="card"><div class="n">CROSS-CUTTING</div><h3>Orchestration</h3><p>Structured JSON handoffs with PASS / FAIL / NEEDS_REVIEW / ESCALATE_TO_HUMAN statuses, independently triggerable stages, configurable thresholds per client, multi-client state and a central audit log.</p></div>
+  </div>
+
+  <h2>The Signal Clarity scoring rubric (v2)</h2>
+  <p class="dim">What makes content citable by AI engines — every article is scored before it can go live.
+  Weights are configurable per client.</p>
+  <table>
+    <tr><th>Criterion</th><th>Points</th><th>Check</th></tr>
+    <tr><td>Direct answer format</td><td>10</td><td>Clear answer to the query within the first 150 words</td></tr>
+    <tr><td>Entity density</td><td>10</td><td>≥ 8 named and defined entities</td></tr>
+    <tr><td>Fact density</td><td>10</td><td>≥ 5 verifiable statistics with named sources</td></tr>
+    <tr><td>FAQ section</td><td>10</td><td>Mandatory — ≥ 3 likely follow-up questions with direct answers</td></tr>
+    <tr><td>Structured answers</td><td>10</td><td>Q&amp;A blocks, numbered lists, definition blocks</td></tr>
+    <tr><td>Schema readiness</td><td>10</td><td>Article/BlogPosting + FAQPage + Author JSON-LD</td></tr>
+    <tr><td>Unique Information Delta</td><td>10</td><td>An angle competitors are not covering</td></tr>
+    <tr><td>Word count</td><td>10</td><td>≥ 2,000 words of expert-level content</td></tr>
+    <tr><td>Semantic relationship links</td><td>10</td><td>Every internal link explains how the two pieces relate (hard requirement)</td></tr>
+    <tr><td>Topical coherence</td><td>10</td><td>Article belongs to a cluster and links stay inside it</td></tr>
+  </table>
+  <p class="dim">DOM ↔ JSON-LD parity is enforced separately by the Publish symmetry gate — a mismatch
+  holds the article back before it ever goes live.</p>
+
+  <h2>Human oversight, by design</h2>
+  <p>Three gates keep specialists in control without slowing the machine down:
+  the <strong>content plan</strong> requires specialist approval before production starts; drafts can require
+  <strong>client review</strong> before publishing (configurable per client); the <strong>performance report</strong>
+  requires specialist sign-off before optimization runs. Anything the agents can't resolve raises an
+  <span class="mono">ESCALATE_TO_HUMAN</span> into the escalation queue.</p>
+
+  <h2>The WordPress plugin interface</h2>
+  <p class="dim">The client-facing dashboard connects over a small authenticated REST API (per-client <code>x-api-key</code>):</p>
+  <pre>GET  /api/plugin/published            → published content metadata (URL, title, schema, visibility)
+GET  /api/plugin/performance          → rankings, per-engine citations, traffic, whitespace, baseline
+GET  /api/plugin/notifications        → pending traffic-threshold notifications for the client
+POST /api/plugin/settings             → client settings push (keywords, niche, competitors, voice)
+POST /api/plugin/content-decision     → client approvals (approved / rejected / revision requested)
+POST /api/plugin/visibility-decision  → make a hidden post publicly visible, or keep it hidden
+POST /api/plugin/publish-confirmation → webhook: the plugin confirms a post is live</pre>
+
+  <h2>About this prototype</h2>
+  <p>The engine, orchestration, gates, scoring and APIs are fully implemented and covered by an
+  automated end-to-end test suite. Every external service (Google Ads, DataForSEO, Search Console,
+  GA4, Ahrefs, WordPress REST, IndexNow, the writing LLM, and per-engine citation checks) sits behind
+  an adapter interface with <strong>deterministic mocks</strong>, so the whole system runs — and can be
+  demoed — without credentials. Swapping a mock for a live integration is a one-file change per service.</p>
+  <p>The <a href="demo.html">interactive demo</a> runs the real agents entirely in your browser:
+  onboard a client, run each stage, approve plans, watch the quality retry loop, publish, see a
+  citation drop get flagged and optimized. Nothing leaves the page.</p>
+
+  <div class="footer">
+    Aureva backend pipeline prototype · built by AU Consulting ·
+    <span class="badge">PASS</span><span class="badge">NEEDS_REVIEW</span><span class="badge">ESCALATE_TO_HUMAN</span>
+  </div>
+</div>
+</body>
+</html>

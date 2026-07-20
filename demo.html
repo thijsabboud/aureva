@@ -1,0 +1,3265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aureva — Pipeline Console (Interactive Demo)</title>
+<style>
+* { box-sizing: border-box; margin: 0; }
+:root {
+  --bg: #0e1116; --panel: #161b23; --panel2: #1d242f; --line: #2a3341;
+  --text: #dbe2ec; --dim: #8b96a5; --accent: #d4a24c; --accent2: #4c9ed4;
+  --ok: #3fae6a; --warn: #d4884c; --bad: #d45050;
+}
+body { background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, "Segoe UI", sans-serif; }
+#app { display: flex; min-height: 100vh; }
+
+#sidebar { width: 230px; background: var(--panel); border-right: 1px solid var(--line); padding: 16px 12px; flex-shrink: 0; }
+.brand { font-weight: 700; letter-spacing: 2px; color: var(--accent); margin-bottom: 4px; }
+.brand span { display: block; font-weight: 400; letter-spacing: 0; color: var(--dim); font-size: 11px; }
+#btn-new-client { width: 100%; margin: 14px 0; }
+#client-list a { display: block; padding: 8px 10px; border-radius: 6px; color: var(--text); text-decoration: none; margin-bottom: 4px; border: 1px solid transparent; }
+#client-list a.sel { background: var(--panel2); border-color: var(--line); }
+#client-list a small { display: block; color: var(--dim); }
+
+#main { flex: 1; padding: 20px 26px; max-width: 1100px; }
+h1 { font-size: 20px; margin-bottom: 2px; }
+h2 { font-size: 15px; margin: 18px 0 8px; color: var(--accent); }
+h3 { font-size: 13px; margin: 12px 0 6px; }
+.dim { color: var(--dim); font-size: 12px; }
+
+.tabs { display: flex; gap: 4px; margin: 16px 0; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.tabs button { background: transparent; border: 1px solid transparent; color: var(--dim); }
+.tabs button.sel { background: var(--panel2); color: var(--text); border-color: var(--line); }
+
+button { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 7px 12px; cursor: pointer; font-size: 13px; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: #14100a; border-color: var(--accent); font-weight: 600; }
+button.danger { border-color: var(--bad); color: var(--bad); }
+button:disabled { opacity: .45; cursor: default; }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+.card h3 { margin: 0 0 4px; }
+.card .num { font-size: 11px; color: var(--dim); }
+.card p { font-size: 12px; color: var(--dim); margin: 6px 0 10px; min-height: 34px; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 8px 0; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--dim); font-weight: 500; font-size: 12px; }
+
+.badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; border: 1px solid; white-space: nowrap; }
+.b-PASS, .b-approved, .b-published, .b-resolved, .b-low { color: var(--ok); border-color: var(--ok); }
+.b-NEEDS_REVIEW, .b-pending_approval, .b-pending_client_review, .b-pending_review, .b-draft, .b-medium, .b-INFO { color: var(--accent2); border-color: var(--accent2); }
+.b-FAIL, .b-flagged, .b-open, .b-high { color: var(--warn); border-color: var(--warn); }
+.b-ESCALATE_TO_HUMAN, .b-escalated, .b-rejected { color: var(--bad); border-color: var(--bad); }
+
+form.panel, .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; max-width: 560px; }
+label { display: block; margin: 10px 0 3px; font-size: 12px; color: var(--dim); }
+input, select, textarea { width: 100%; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 6px; padding: 7px 9px; font-size: 13px; }
+.row { display: flex; gap: 8px; align-items: center; }
+.check { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+.check input { width: auto; }
+
+#toast { position: fixed; bottom: 18px; right: 18px; max-width: 440px; background: var(--panel2); border: 1px solid var(--accent); border-radius: 8px; padding: 12px 14px; font-size: 13px; display: none; z-index: 40; box-shadow: 0 6px 24px rgba(0,0,0,.5); }
+#toast.show { display: block; }
+
+#modal-wrap { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; z-index: 30; overflow: auto; padding: 40px 20px; }
+#modal-wrap.show { display: block; }
+#modal { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; max-width: 760px; margin: 0 auto; padding: 20px 24px; }
+pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px; overflow: auto; font-size: 12px; white-space: pre-wrap; }
+.mono { font-family: ui-monospace, monospace; font-size: 12px; }
+.empty { color: var(--dim); padding: 24px; text-align: center; border: 1px dashed var(--line); border-radius: 8px; margin-top: 10px; }
+.cite-yes { color: var(--ok); } .cite-no { color: var(--bad); }
+.cite-nobody { color: var(--accent); }
+.b-visible { color: var(--ok); border-color: var(--ok); }
+.b-hidden { color: var(--accent); border-color: var(--accent); }
+
+#demo-banner { background: linear-gradient(90deg, #2a2214, #161b23); border-bottom: 1px solid var(--accent); padding: 8px 16px; font-size: 12px; color: var(--dim); display: flex; gap: 12px; align-items: center; }
+#demo-banner strong { color: var(--accent); }
+#demo-banner button { padding: 3px 10px; font-size: 12px; }
+#demo-banner button:first-of-type { margin-left: auto; }
+</style>
+</head>
+<body>
+<div id="demo-banner">
+  <strong>INTERACTIVE DEMO</strong>
+  <span>Everything runs in your browser with deterministic mock APIs — real agents, real gates, real scoring. Nothing leaves this page.</span>
+  <button onclick="demoTour.start()" data-testid="tour-start">Show tour</button>
+  <button onclick="demoReset()" data-testid="demo-reset">Reset demo data</button>
+</div>
+<div id="app">
+  <aside id="sidebar">
+    <div class="brand">AUREVA <span>pipeline console</span></div>
+    <button id="btn-new-client" data-testid="new-client" onclick="showOnboard()">+ New client</button>
+    <nav id="client-list" data-testid="client-list"></nav>
+  </aside>
+  <main id="main">
+    <div id="content" data-testid="main-content"></div>
+  </main>
+</div>
+<div id="toast" data-testid="toast"></div>
+<div id="modal-wrap" onclick="if(event.target===this)closeModal()"><div id="modal" data-testid="modal"></div></div>
+<script>
+const __modules = {};
+function __define(name, fn) {
+  const module = { exports: {} };
+  fn(module, module.exports, __require);
+  __modules[name] = module.exports;
+}
+function __require(p) {
+  const name = p.split('/').pop().replace(/\.js$/, '');
+  if (name === 'crypto') {
+    return { randomBytes: (n) => ({ toString: () =>
+      Array.from(crypto.getRandomValues(new Uint8Array(n))).map(b => b.toString(16).padStart(2, '0')).join('') }) };
+  }
+  if (!__modules[name]) throw new Error('demo module not found: ' + name);
+  return __modules[name];
+}
+
+__define('util', function (module, exports, require) {
+'use strict';
+const crypto = require('crypto');
+
+// FNV-1a — stable deterministic hash for all mock adapters
+function fnv1a(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h;
+}
+
+function uid(prefix) {
+  return `${prefix}_${crypto.randomBytes(5).toString('hex')}`;
+}
+
+function slugify(s) {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+}
+
+function now() {
+  return new Date().toISOString();
+}
+
+module.exports = { fnv1a, uid, slugify, now };
+
+});
+
+__define('mock', function (module, exports, require) {
+'use strict';
+// Deterministic mock adapters for every external service in the brief.
+// Live implementations (Google Ads, DataForSEO, GSC, GA4, Ahrefs, WordPress REST,
+// IndexNow, Anthropic LLM, per-engine citation checks, site crawler) replace these
+// one-for-one: same function signatures, real transport.
+const { fnv1a, slugify, now, uid } = require('../util');
+
+const ENGINES = ['chatgpt', 'gemini', 'perplexity', 'google_ai_overview'];
+// July 2026 update §2.3: robots.txt must explicitly allow all six.
+const REQUIRED_BOTS = ['GPTBot', 'ClaudeBot', 'PerplexityBot', 'Googlebot', 'Gemini-Bot', 'Bingbot'];
+
+// ---- Research adapters -----------------------------------------------------
+
+// Google Ads API mock — volume/competition/CPC per keyword.
+// Competition is template-driven so long-tail-first prioritization is meaningful:
+// head terms are high competition, modifiers are medium/low. Modifier templates
+// follow the client's primary language (NL/EN in scope from day one, SPEC §10.1).
+function expandKeywords(seed, lang) {
+  const variants = lang === 'nl' ? [
+    { kw: seed, competition: 'high' },
+    { kw: `beste ${seed}`, competition: 'medium' },
+    { kw: `${seed} gids`, competition: 'low' },
+    { kw: `hoe kies je ${seed}`, competition: 'low' },
+    { kw: `${seed} voor beginners`, competition: 'low' }
+  ] : [
+    { kw: seed, competition: 'high' },
+    { kw: `best ${seed}`, competition: 'medium' },
+    { kw: `${seed} guide`, competition: 'low' },
+    { kw: `how to handle ${seed}`, competition: 'low' },
+    { kw: `${seed} for startups`, competition: 'low' }
+  ];
+  return variants.map(v => {
+    const h = fnv1a(v.kw);
+    return {
+      keyword: v.kw,
+      volume: v.competition === 'high' ? 5000 + (h % 20000) : 100 + (h % 1900),
+      competition: v.competition,
+      cpc: +(0.5 + (h % 700) / 100).toFixed(2),
+      intent: h % 2 === 0 ? 'both' : 'ai', // DataForSEO mock: AI-engine intent mapping
+      source: 'seed_expansion'
+    };
+  });
+}
+
+// Google Autocomplete mock — conversational long-tail queries.
+function autocomplete(seed, lang) {
+  const prefixes = lang === 'nl' ? ['wat is', 'wat kost', 'checklist voor'] : ['what is', 'is it worth', 'checklist for'];
+  return prefixes.map(prefix => {
+    const kw = `${prefix} ${seed}`;
+    const h = fnv1a(kw);
+    return {
+      keyword: kw, volume: 50 + (h % 450), competition: 'low',
+      cpc: +(0.2 + (h % 300) / 100).toFixed(2),
+      intent: 'ai', source: 'autocomplete'
+    };
+  });
+}
+
+// Ahrefs mock — competitor content-gap analysis.
+function competitorGaps(competitors, niche, lang) {
+  const angles = lang === 'nl' ? ['veelgemaakte fouten', 'kostenoverzicht'] : ['mistakes to avoid', 'cost breakdown'];
+  return competitors.slice(0, 2).map((comp, i) => {
+    const kw = `${niche} ${angles[i % 2]}`;
+    const h = fnv1a(comp + kw);
+    return {
+      keyword: kw, volume: 80 + (h % 700), competition: 'low',
+      cpc: +(0.3 + (h % 400) / 100).toFixed(2),
+      intent: 'both', source: 'competitor_gap', gapFrom: comp
+    };
+  });
+}
+
+// DataForSEO mock — fan-out sub-questions AI engines use for a topic.
+function fanOutQueries(keyword, lang) {
+  return lang === 'nl'
+    ? [`${keyword} uitgelegd`, `${keyword} voor- en nadelen`, `${keyword} voorbeelden`]
+    : [`${keyword} explained`, `${keyword} pros and cons`, `${keyword} examples`];
+}
+
+// ---- Onboarding intake adapters (v1.2, SPEC §10.1–10.2) ----------------------
+
+const INTENTS = ['informational', 'comparative', 'transactional', 'local'];
+const PROMPT_RUNS = 3; // runs per prompt per engine per week — never single-run
+
+// Site-crawl brand signals mock — in production a crawler + LLM pass over the
+// client's existing pages feeds the brand-profile draft alongside the intake.
+function crawlBrandSignals(domain) {
+  const h = fnv1a(domain + 'brand');
+  return {
+    pagesCrawled: 4,
+    detectedTone: ['formal', 'conversational', 'clinical', 'warm'][h % 4],
+    detectedTopics: ['services', 'pricing', 'team', 'blog'].slice(0, 2 + (h % 3)),
+    hasExistingBlog: h % 3 !== 0
+  };
+}
+
+// Prompt-set generator (SPEC §10.2): 40–100 intent-grouped prompts drawn from
+// the approved brand profile (audiences × intents × seed keywords), in the
+// client's primary language. In production this is an LLM call over the
+// profile; the templates keep it deterministic here.
+const PROMPT_TEMPLATES = {
+  en: {
+    informational: [
+      (kw) => `what is ${kw} and how does it work`,
+      (kw) => `${kw} explained in plain language`,
+      (kw) => `how long does ${kw} take`,
+      (kw) => `is ${kw} safe and what are the risks`,
+      (kw, aud) => `${kw} explained for ${aud}`
+    ],
+    comparative: [
+      (kw) => `${kw} compared to the alternatives`,
+      (kw) => `which provider should I choose for ${kw}`,
+      (kw) => `${kw} pros and cons`,
+      (kw) => `is ${kw} better than the traditional option`,
+      (kw, aud) => `best ${kw} option for ${aud}`
+    ],
+    transactional: [
+      (kw) => `what does ${kw} cost`,
+      (kw) => `${kw} price breakdown ${new Date().getFullYear()}`,
+      (kw) => `how do I book an appointment for ${kw}`,
+      (kw) => `is ${kw} covered by insurance`,
+      (kw, aud) => `${kw} offers for ${aud}`
+    ],
+    local: [
+      (kw) => `${kw} near me`,
+      (kw) => `best rated ${kw} in my area`,
+      (kw) => `${kw} with short waiting times nearby`,
+      (kw) => `who offers ${kw} in my city`,
+      (kw, aud) => `${kw} nearby recommended for ${aud}`
+    ]
+  },
+  nl: {
+    informational: [
+      (kw) => `wat is ${kw} en hoe werkt het`,
+      (kw) => `${kw} eenvoudig uitgelegd`,
+      (kw) => `hoe lang duurt ${kw}`,
+      (kw) => `is ${kw} veilig en wat zijn de risico's`,
+      (kw, aud) => `${kw} uitgelegd voor ${aud}`
+    ],
+    comparative: [
+      (kw) => `${kw} vergeleken met de alternatieven`,
+      (kw) => `welke aanbieder kies ik voor ${kw}`,
+      (kw) => `voor- en nadelen van ${kw}`,
+      (kw) => `is ${kw} beter dan de klassieke aanpak`,
+      (kw, aud) => `beste optie voor ${kw} voor ${aud}`
+    ],
+    transactional: [
+      (kw) => `wat kost ${kw}`,
+      (kw) => `${kw} kosten overzicht ${new Date().getFullYear()}`,
+      (kw) => `hoe maak ik een afspraak voor ${kw}`,
+      (kw) => `wordt ${kw} vergoed door de verzekering`,
+      (kw, aud) => `${kw} aanbod voor ${aud}`
+    ],
+    local: [
+      (kw) => `${kw} in de buurt`,
+      (kw) => `best beoordeelde ${kw} bij mij in de buurt`,
+      (kw) => `${kw} met korte wachttijd in de omgeving`,
+      (kw) => `wie biedt ${kw} aan in mijn stad`,
+      (kw, aud) => `${kw} in de buurt, aangeraden voor ${aud}`
+    ]
+  }
+};
+
+function generatePromptSet(client, version) {
+  const profile = client.profile || {};
+  const lang = profile.primaryLanguage === 'nl' ? 'nl' : 'en';
+  const audiences = (profile.audiences && profile.audiences.length)
+    ? profile.audiences : ['prospective clients', 'evaluators'];
+  const seeds = client.keywords.length ? client.keywords : [client.niche];
+  const groups = [];
+  const seen = new Set();
+  for (const intent of INTENTS) {
+    const templates = PROMPT_TEMPLATES[lang][intent];
+    const prompts = [];
+    const add = (text) => {
+      const key = text.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      prompts.push({ id: uid('pr'), text, language: lang });
+    };
+    for (const kw of seeds) for (const tpl of templates.slice(0, 4)) add(tpl(kw));
+    const audTpl = templates[4];
+    for (const aud of audiences) for (const kw of seeds.slice(0, 2)) add(audTpl(kw, aud));
+    groups.push({ intent, prompts });
+  }
+  // clamp to the 40–100 band: pad with niche-level prompts, trim overflow evenly
+  let total = groups.reduce((s, g) => s + g.prompts.length, 0);
+  let pad = 0;
+  while (total < 40) {
+    const g = groups[pad % groups.length];
+    const tpl = PROMPT_TEMPLATES[lang][g.intent][pad % 4];
+    const text = `${tpl(client.niche)} (${++pad})`;
+    g.prompts.push({ id: uid('pr'), text, language: lang });
+    total++;
+  }
+  while (total > 100) {
+    const g = groups.reduce((a, b) => (a.prompts.length >= b.prompts.length ? a : b));
+    g.prompts.pop();
+    total--;
+  }
+  return {
+    id: uid('ps'),
+    version: version || 1,
+    status: 'pending_approval',
+    total,
+    groups,
+    generatedFrom: `brand profile v${profile.version || 1} (${audiences.length} audiences × ${INTENTS.length} intents × ${seeds.length} seed keywords)`,
+    createdAt: now()
+  };
+}
+
+// Prompt tracking mock (SPEC §10.3): one deterministic outcome per
+// (client, prompt, engine, week, run). Mentioned = brand named in the answer;
+// cited = client URL used as a source — cited implies mentioned. The week is
+// part of the hash so weekly rates genuinely move (observable volatility),
+// with a mild upward trend as published content beds in.
+function promptRunCheck(clientId, prompt, engine, week, runIdx) {
+  const h = fnv1a(`${clientId}|${prompt}|${engine}|w${week}|r${runIdx}`);
+  const mentioned = h % 10 < 4 + Math.min(week, 4);
+  const cited = mentioned && (h >> 3) % 10 < 2 + Math.min(week, 3);
+  return { mentioned, cited };
+}
+
+// ---- Baseline audit adapters (Agent 0) ---------------------------------------
+
+// Site crawler mock — the client's pre-existing pages, as found at onboarding.
+// Legacy content is deliberately imperfect: thin pages, one JS-rendered page,
+// one orphan, missing schema, and fact claims that disagree with each other
+// (their values derive from the URL, not the client, so they conflict both with
+// each other and — sometimes — with what the writer produces later).
+function existingSite(client) {
+  // Live adapter seam (v1.2.1): when a real crawl ran at onboarding, the
+  // baseline audits the REAL pages instead of the fabricated legacy site.
+  if (client.crawlCache && client.crawlCache.pages) return client.crawlCache.pages;
+  const mk = (path, title, opts = {}) => {
+    const h = fnv1a(client.domain + path);
+    return {
+      url: `https://${client.domain}${path}`,
+      title,
+      wordCount: opts.thin ? 300 + (h % 400) : 900 + (h % 900),
+      hasSchema: !!opts.schema,
+      jsRendered: !!opts.jsRendered,
+      orphan: !!opts.orphan,
+      faqCount: opts.faq || 0,
+      facts: (opts.subjects || []).map(subject => ({
+        subject,
+        claim: `${legacyFactValue(client.domain + path, subject)}% of B2B buyers now start research in an AI assistant`,
+        value: legacyFactValue(client.domain + path, subject),
+        source: 'uncited'
+      })),
+      ...opts
+    };
+  };
+  return [
+    mk('/about', `About ${client.name}`, { thin: true, subjects: [] }),
+    mk('/services', `${client.name} — Services`, { schema: true, subjects: [`metric-1`] }),
+    // the two legacy blog posts share metric-1 with /services and each other →
+    // guaranteed contradiction material for the baseline scan
+    mk('/blog/old-industry-overview', `The state of ${client.niche}`, { subjects: ['metric-1', 'metric-2'], faq: 1 }),
+    mk('/blog/legacy-tips', `${client.niche}: 7 tips`, { thin: true, jsRendered: true, orphan: true, subjects: ['metric-2'] })
+  ];
+}
+
+function legacyFactValue(basis, subject) {
+  return 40 + (fnv1a(basis + subject) % 45); // 40–84, a different derivation than the writer's
+}
+
+// Citability heuristic for existing pages (0–100) — a lightweight cousin of the
+// full rubric, appropriate for content we didn't produce.
+function scoreExistingPage(page) {
+  let score = 0;
+  score += page.wordCount >= 1500 ? 25 : page.wordCount >= 800 ? 15 : 5;
+  score += page.hasSchema ? 20 : 0;
+  score += page.faqCount >= 1 ? 15 : 0;
+  score += page.jsRendered ? 0 : 25; // invisibility penalty: JS-rendered content hurts
+  score += page.orphan ? 0 : 15;    // orphans break authority flow
+  return score;
+}
+
+// Per-query per-engine baseline citation ownership: who does this engine cite
+// today — the client, a competitor, or nobody (citation whitespace)?
+function queryCitationOwner(client, query, engine, runIndex = 0) {
+  const h = fnv1a(client.domain + query + engine + (runIndex ? `run${Math.floor(runIndex / 3)}` : 'baseline'));
+  const roll = h % 10;
+  if (roll < 4) return null; // nobody cited — whitespace, the cheapest win
+  if (roll < 8) return `competitor:${(client.competitors[h % client.competitors.length] || 'unknown').replace(/^https?:\/\//, '')}`;
+  return 'client';
+}
+
+// Contradiction detector v1 — same fact subject, materially different values.
+// Works on anything exposing { facts: [{ subject, value, claim }] } plus a label.
+function findContradictions(items) {
+  const seen = new Map(); // subject → [{ label, value, claim }]
+  const out = [];
+  for (const it of items) {
+    for (const f of it.facts || []) {
+      if (!f.subject || typeof f.value !== 'number') continue;
+      const prevList = seen.get(f.subject) || [];
+      for (const prev of prevList) {
+        if (prev.label !== it.label && Math.abs(prev.value - f.value) >= 5) {
+          out.push({
+            subject: f.subject,
+            a: { label: prev.label, claim: prev.claim, value: prev.value },
+            b: { label: it.label, claim: f.claim, value: f.value },
+            delta: Math.abs(prev.value - f.value),
+            severe: Math.abs(prev.value - f.value) >= 15
+          });
+        }
+      }
+      prevList.push({ label: it.label, value: f.value, claim: f.claim });
+      seen.set(f.subject, prevList);
+    }
+  }
+  return out;
+}
+
+// ---- Measure adapters ------------------------------------------------------
+
+// Google Search Console mock — impressions/clicks/position per keyword.
+function gscKeywordData(clientId, keyword, runIndex) {
+  const h = fnv1a(clientId + keyword);
+  const impressions = 200 + (h % 1800) + runIndex * 40;
+  const position = Math.max(1, 4 + (h % 38) - Math.min(runIndex, 3));
+  return {
+    keyword, impressions,
+    clicks: Math.round(impressions * (0.02 + (h % 8) / 100)),
+    position
+  };
+}
+
+// GA4 mock.
+function ga4Data(clientId, runIndex) {
+  const h = fnv1a(clientId + 'ga4' + runIndex);
+  return {
+    organicSessions: 400 + (h % 2000) + runIndex * 120,
+    engagementRate: +(0.45 + (h % 30) / 100).toFixed(2),
+    conversions: 5 + (h % 40) + runIndex
+  };
+}
+
+// Per-article weekly visitors (GA4 page-level mock) — drives the hidden-post
+// traffic threshold. Rises run over run so notifications reliably appear.
+function articleVisitors(clientId, slug, runIndex) {
+  return (fnv1a(clientId + slug + 'visitors') % 5) + runIndex * 2;
+}
+
+// AI Citation Simulator mock — per engine, per article. Citations are
+// probabilistic (brief §3.1); the mock models weekly volatility. Documented
+// deterministic rule: the alphabetically-first published article cycles
+// cited↔dropped on Perplexity per run, so drop detection is always observable.
+function citationCheck(clientId, slug, engine, runIndex, isFirstSlug) {
+  if (engine === 'perplexity' && isFirstSlug) return runIndex % 2 === 1;
+  const h = fnv1a(clientId + slug + engine);
+  return h % 4 !== 0;
+}
+
+// AI bot tracker mock — crawler visits confirm AI engines are indexing.
+function botVisits(clientId, runIndex) {
+  return ['GPTBot', 'ClaudeBot', 'Google-Extended', 'PerplexityBot'].map(bot => ({
+    bot, visits: 3 + (fnv1a(clientId + bot) % 40) + runIndex * 2
+  }));
+}
+
+// Content-gap discovery mock — GSC queries with impressions but no ranking page.
+function impressionGaps(niche, runIndex, lang) {
+  const topics = lang === 'nl'
+    ? ['veelgestelde prijsvragen', 'vergelijking met alternatieven', 'checklist vergoedingen']
+    : ['pricing questions', 'vs alternatives', 'compliance checklist'];
+  const t = topics[runIndex % topics.length];
+  return [{
+    query: `${niche} ${t}`,
+    impressions: 120 + (fnv1a(niche + t) % 500),
+    rankingPage: null
+  }];
+}
+
+// ---- Publish adapters ------------------------------------------------------
+
+function robotsTxt(client) {
+  if (client.simulateRobotsBlock) {
+    return 'User-agent: GPTBot\nDisallow: /\n\nUser-agent: *\nAllow: /\n';
+  }
+  // live seam: the site's actual robots.txt, as fetched at onboarding
+  if (client.crawlCache && client.crawlCache.robotsTxt) return client.crawlCache.robotsTxt;
+  return REQUIRED_BOTS
+    .map(b => `User-agent: ${b}\nAllow: /`).join('\n\n') + '\n\nSitemap: /sitemap.xml\n';
+}
+
+function crawlCheck(client) {
+  // live seam: real robots verdict from the group-based parser (demo blocks
+  // still win so the escalation flow stays demonstrable on live clients)
+  if (!client.simulateRobotsBlock && client.crawlCache && client.crawlCache.robotsCheck) {
+    return client.crawlCache.robotsCheck;
+  }
+  const txt = robotsTxt(client);
+  const blocked = REQUIRED_BOTS.filter(bot =>
+    new RegExp(`User-agent: ${bot}\\nDisallow: /`).test(txt) ||
+    (/User-agent: \*\nDisallow: \//.test(txt) && !txt.includes(`User-agent: ${bot}\nAllow`)));
+  return { ok: blocked.length === 0, blocked, required: REQUIRED_BOTS };
+}
+
+// Symmetry gate (July update §1.4): 1:1 parity between the DOM (what renders)
+// and the JSON-LD metadata. Any mismatch = ambiguous signal = no publish.
+function symmetryCheck(article) {
+  const mismatches = [];
+  if (article.schemaHeadline !== article.title) {
+    mismatches.push(`JSON-LD headline "${article.schemaHeadline}" ≠ H1 "${article.title}"`);
+  }
+  const opening = (article.directAnswer || '').split(/\s+/).slice(0, 12).join(' ');
+  if (opening && article.schemaDescription && !article.schemaDescription.startsWith(opening.split(' ').slice(0, 4).join(' '))) {
+    mismatches.push('JSON-LD description does not derive from the opening paragraph');
+  }
+  return { ok: mismatches.length === 0, mismatches };
+}
+
+// WordPress REST API mock — writes into the client's mock site state.
+// Posts are created "published but not in navigation" (July update §2.1):
+// live URL, discoverable via sitemap + llms.txt, invisible to site visitors
+// until the client opts in after the traffic threshold.
+function wpUpsertPost(client, article) {
+  const url = `/mock-wp/${client.id}/posts/${article.slug}`;
+  const post = {
+    slug: article.slug,
+    title: article.title,
+    url,
+    inNavigation: article.visibility === 'visible',
+    clusterTopic: article.clusterTopic || null,
+    isPillar: !!article.isPillar,
+    metaTitle: `${article.title} | ${client.name}`,
+    metaDescription: article.directAnswer.split(/\s+/).slice(0, 24).join(' ') + '…',
+    canonical: url,
+    og: { 'og:title': article.title, 'og:type': 'article', 'og:url': url },
+    category: client.niche,
+    tags: article.targetKeywords,
+    featuredImage: `/mock-wp/${client.id}/media/${article.slug}.jpg`,
+    schema: buildSchema(client, article),
+    body: article.sections,
+    faq: article.faq,
+    internalLinks: article.internalLinks,
+    version: article.version,
+    updatedAt: now()
+  };
+  const i = client.wp.posts.findIndex(p => p.slug === post.slug);
+  if (i >= 0) client.wp.posts[i] = post; else client.wp.posts.push(post);
+  return post;
+}
+
+// Publish-confirmation webhook mock. In production the WordPress plugin calls
+// POST /api/plugin/publish-confirmation; here the mock confirms instantly
+// unless the demo toggle simulates a dead webhook.
+function webhookConfirm(client, article) {
+  if (client.simulateWebhookFailure) return { confirmed: false };
+  return { confirmed: true, at: now() };
+}
+
+// Post-publish verification (July update §2.3): the live URL must return 200
+// and carry the full article as static HTML — body, FAQ and JSON-LD present,
+// nothing left to client-side rendering.
+function verifyPublished(client, article) {
+  const post = client.wp.posts.find(p => p.slug === article.slug);
+  const checks = {
+    status200: !!post,
+    staticBody: !!post && post.body.length >= 4 && post.body.every(s => s.content && s.content.length > 100),
+    faqPresent: !!post && (article.faq.length === 0 || post.faq.length === article.faq.length),
+    schemaEmbedded: !!post && post.schema.length >= 1,
+    notJsRendered: true // the mock renderer emits static HTML only
+  };
+  return { ok: Object.values(checks).every(Boolean), checks };
+}
+
+function buildSchema(client, article) {
+  const schemas = [{
+    '@type': article.schemaType || 'BlogPosting',
+    headline: article.schemaHeadline || article.title,
+    description: article.schemaDescription || undefined,
+    author: { '@type': 'Person', name: `${client.name} Editorial`, url: `/mock-wp/${client.id}/author` },
+    datePublished: article.publishedAt || now()
+  }];
+  if (article.faq.length) {
+    schemas.push({
+      '@type': 'FAQPage',
+      mainEntity: article.faq.map(f => ({
+        '@type': 'Question', name: f.q,
+        acceptedAnswer: { '@type': 'Answer', text: f.a }
+      }))
+    });
+  }
+  return schemas;
+}
+
+// llms.txt generator — regenerated after every publish/optimize. July update
+// §2.3: each entry lists URL, a one-sentence description AND its topic cluster.
+function renderLlmsTxt(client) {
+  const lines = [
+    `# ${client.name}`, `> ${client.niche}`, '', '## Key pages'
+  ];
+  for (const p of client.wp.posts) {
+    const cluster = p.clusterTopic ? ` [cluster: ${p.clusterTopic}]` : '';
+    lines.push(`- [${p.title}](${p.url}): ${p.metaDescription}${cluster}`);
+  }
+  return lines.join('\n') + '\n';
+}
+
+// XML sitemap generator — July update §2.3: articles grouped into topical
+// clusters (not a flat list), pillar URL first in its cluster group, with
+// lastmod and changefreq. Hidden posts ARE listed — the sitemap is exactly
+// how AI crawlers discover them.
+function renderSitemap(client) {
+  const groups = new Map();
+  for (const p of client.wp.posts) {
+    const key = p.clusterTopic || 'uncategorised';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(p);
+  }
+  const lines = ['<?xml version="1.0" encoding="UTF-8"?>',
+    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'];
+  for (const [topic, posts] of groups) {
+    posts.sort((a, b) => (b.isPillar ? 1 : 0) - (a.isPillar ? 1 : 0));
+    lines.push(`  <!-- cluster: ${topic} -->`);
+    for (const p of posts) {
+      lines.push('  <url>',
+        `    <loc>${p.url}</loc>`,
+        `    <lastmod>${p.updatedAt.slice(0, 10)}</lastmod>`,
+        '    <changefreq>weekly</changefreq>',
+        '  </url>');
+    }
+  }
+  lines.push('</urlset>');
+  return lines.join('\n') + '\n';
+}
+
+// IndexNow + GSC ping mocks — recorded, not sent.
+function ping(client, service, urls) {
+  client.wp.pings.push({ service, urls, ts: now() });
+}
+
+// ---- Writer LLM mock -------------------------------------------------------
+// Deterministic template "LLM". A real adapter calls the Anthropic API with the
+// brief + brand voice; rewrite() maps quality feedback to targeted edits.
+
+const AUTHORITY_SOURCES = ['Harvard Business Review', 'Gartner', 'McKinsey', 'Statista', 'Forrester'];
+const FACT_SUBJECT_SPACE = 23;
+
+function para(topic, angleWord, n, lang) {
+  const sentence = lang === 'nl'
+    ? `In de praktijk hangt ${topic} af van hoe een team ${angleWord} denken toepast op de eigen ` +
+      `situatie en beperkingen, en de organisaties die dit behandelen als een vaste werkwijze in ` +
+      `plaats van een eenmalig project zien binnen twee tot drie kwartalen aantoonbaar en ` +
+      `consistent betere resultaten in de eigen cijfers.`
+    : `In practice, ${topic} depends on how a team applies ${angleWord} thinking to its own constraints, ` +
+      `and the organisations that treat this as an operating discipline rather than a one-off project ` +
+      `consistently see stronger outcomes within two to three quarters.`;
+  return new Array(n).fill(sentence).join(' ');
+}
+
+// Semantic relationship link (July update §1.5): not a bare hyperlink but a
+// conceptual bridge explaining HOW the two pieces of content relate.
+function linkContext(fromKeyword, target, niche, lang) {
+  const t = target.replace(/-/g, ' ');
+  return lang === 'nl'
+    ? `Deze aanpak van ${fromKeyword} is de praktische toepassing van het kader uit onze gids over ` +
+      `${t}, waarin staat welke afwegingen binnen ${niche} dezelfde beslissing in een andere fase bepalen.`
+    : `This approach to ${fromKeyword} is the practical application of the framework covered in ` +
+      `our guide to ${t}, which explains the criteria ${niche} teams use ` +
+      `when weighing the same decision at a different stage.`;
+}
+
+// Regulated-industry compliance disclaimer (SPEC §10.1) — a mandatory section
+// for regulated clients; Quality enforces its presence as a hard check.
+function complianceDisclaimer(lang, industry) {
+  return lang === 'nl'
+    ? {
+        heading: 'Medische disclaimer',
+        content: `Deze informatie over ${industry} is algemeen voorlichtend bedoeld en vervangt geen ` +
+          `persoonlijk advies van een bevoegde zorgverlener. Resultaten van behandelingen verschillen ` +
+          `per persoon en er worden hier geen resultaatgaranties gegeven. Raadpleeg bij klachten of ` +
+          `twijfel altijd een gekwalificeerde professional. Bronnen voor medische claims staan bij de ` +
+          `betreffende passages vermeld.`
+      }
+    : {
+        heading: 'Medical & regulatory disclaimer',
+        content: `This information about ${industry} is provided for general education and does not ` +
+          `replace personal advice from a qualified professional. Treatment outcomes vary per person ` +
+          `and no outcome guarantees are made here. Always consult a licensed practitioner when in ` +
+          `doubt. Sources for regulated claims are referenced alongside the relevant passages.`
+      };
+}
+
+// The writer is self-consistent per client: a fact's value derives from the
+// client domain + subject, so the same statistic never disagrees with itself
+// across the corpus. (Legacy site content uses a different derivation — see
+// existingSite — which is what the contradiction scan exists to catch.)
+function factFor(client, subjectIndex) {
+  const subject = `metric-${subjectIndex}`;
+  const value = 62 + (fnv1a(client.domain + subject) % 30);
+  return {
+    subject,
+    value,
+    claim: `${value}% of B2B buyers now start research in an AI assistant`,
+    source: AUTHORITY_SOURCES[subjectIndex % AUTHORITY_SOURCES.length],
+    year: 2024 + (subjectIndex % 3)
+  };
+}
+
+function writeArticle(client, brief, attempt) {
+  const kw = brief.targetKeywords[0];
+  const h = fnv1a(client.domain + kw); // domain-based: content is deterministic per client site
+  const profile = client.profile || {};
+  const lang = profile.primaryLanguage === 'nl' ? 'nl' : 'en';
+  const regulated = !!profile.regulated;
+  // Documented first-draft imperfections (exercise every control loop):
+  const omitFaq = attempt === 1 && brief.index % 3 === 0;          // → quality retry
+  const omitLinkContext = attempt === 1 && brief.index % 5 === 1;  // → rubric v2 retry
+  const driftSchema = attempt === 1 && brief.index % 4 === 2;      // → publish symmetry gate
+  const omitDisclaimer = regulated && attempt === 1 && brief.index % 6 === 4; // → compliance check
+  const angleWord = (lang === 'nl'
+    ? ['praktijkgericht', 'patiëntgericht', 'bewijsgedreven', 'kostenbewust']
+    : ['contrarian', 'operator-first', 'evidence-led', 'cost-aware'])[h % 4];
+
+  const directAnswer = lang === 'nl'
+    ? `${cap(kw)} draait om drie beslissingen: omvang, volgorde en eigenaarschap. ` +
+      `Voor ${client.niche} is de snelste betrouwbare route om klein te beginnen, een definitief ` +
+      `antwoord te publiceren op de exacte vraag die mensen stellen, en pas uit te breiden zodra de ` +
+      `eerste pagina citaties verdient. Dit artikel kiest een ${angleWord}e invalshoek — ` +
+      `${brief.uniqueAngle} — met de concrete checklist, de veelgemaakte fouten en de benchmarks ` +
+      `om het eigen proces tegen af te zetten.`
+    : `${cap(kw)} comes down to three decisions: scope, sequencing and ownership. ` +
+      `For ${client.niche}, the fastest reliable path is to start narrow, publish a definitive answer ` +
+      `to the exact question buyers ask, and expand coverage only once the first page earns citations. ` +
+      `This article takes an ${angleWord} approach — ${brief.uniqueAngle} — and gives you the exact ` +
+      `checklist, the common failure modes, and the benchmarks to hold your process against.`;
+
+  const entityBase = [
+    client.name, client.niche, 'Google AI Overview', 'ChatGPT', 'Perplexity', 'Gemini',
+    'schema.org', 'E-E-A-T'
+  ];
+  const entities = entityBase.concat(attempt > 1 ? ['llms.txt', 'IndexNow', 'Search Console'] : [])
+    .slice(0, 8 + (h % 4) + (attempt > 1 ? 3 : 0));
+
+  const facts = [];
+  const factCount = 5 + (h % 3) + (attempt > 1 ? 1 : 0);
+  for (let i = 0; i < factCount; i++) {
+    facts.push(factFor(client, (h + i * 7) % FACT_SUBJECT_SPACE));
+  }
+
+  const sections = brief.headings.filter(hd => hd !== 'FAQ').map((heading, i) => ({
+    heading,
+    content: para(kw, angleWord, 10 + ((h + i) % 3), lang)
+  }));
+  if (regulated && !omitDisclaimer) {
+    // client-facing copy uses the (localised) niche; `industry` stays the
+    // operator-facing compliance label
+    sections.push(complianceDisclaimer(lang, client.niche));
+  }
+
+  const faq = omitFaq ? [] : defaultFaq(kw, lang);
+  const schemaTypes = [brief.schemaType, 'Person'].concat(faq.length ? ['FAQPage'] : []);
+
+  const title = lang === 'nl'
+    ? `${cap(kw)}: het complete stappenplan`
+    : `${cap(kw)}: The ${cap(angleWord)} Playbook`;
+  const internalLinks = (brief.internalLinkTargets || []).slice(0, 3 + (h % 2)).map(t => ({
+    target: t.slug || t,
+    context: omitLinkContext ? '' : linkContext(kw, t.slug || t, client.niche, lang),
+    sameCluster: typeof t === 'object' ? !!t.sameCluster : false
+  }));
+
+  const article = {
+    title,
+    slug: slugify(kw),
+    keyword: kw,
+    targetKeywords: brief.targetKeywords,
+    directAnswer,
+    sections,
+    entities,
+    facts,
+    faq,
+    structuredBlocks: 2 + (h % 2), // numbered lists + definition blocks
+    schemaTypes,
+    schemaType: brief.schemaType,
+    // symmetry drift: a keyword-stuffed schema headline that no longer matches the H1
+    schemaHeadline: driftSchema ? `${cap(kw)} — Best ${cap(client.niche)} ${new Date().getFullYear()}` : title,
+    schemaDescription: directAnswer.split(/\s+/).slice(0, 24).join(' ') + '…',
+    internalLinks,
+    clusterTopic: brief.clusterTopic || null,
+    isPillar: !!brief.isPillar,
+    angle: brief.uniqueAngle,
+    language: lang,
+    ...(regulated ? {
+      compliance: {
+        regulated: true,
+        industry: profile.industry || client.niche,
+        disclaimerPresent: !omitDisclaimer
+      }
+    } : {}),
+    attempt
+  };
+  article.wordCount = countWords(article);
+  return article;
+}
+
+function defaultFaq(kw, lang) {
+  if (lang === 'nl') {
+    return [
+      { q: `Hoe snel zie ik resultaat van ${kw}?`, a: 'Reken op de eerste AI-citaties binnen 8–12 weken op vragen met weinig concurrentie, met daarna een opbouwend effect.' },
+      { q: `Wat kost ${kw}?`, a: 'Budgetteer voor contentproductie plus monitoring; de grootste kostenfactor is de concurrentiedichtheid in de niche.' },
+      { q: `Kan ${kw} volledig geautomatiseerd worden?`, a: 'De pipeline kan agentisch van begin tot eind draaien, met menselijke controle bij het plan en de kwaliteitspoort.' },
+      { q: `Hoe wordt ${kw} gemeten?`, a: 'Volg wekelijks de citatiestatus per AI-zoekmachine naast Search Console-vertoningen, klikken en gemiddelde positie.' }
+    ];
+  }
+  return [
+    { q: `How long does ${kw} take to show results?`, a: 'Expect first AI citations within 8–12 weeks on low-competition queries, and compounding gains after that.' },
+    { q: `What does ${kw} cost?`, a: 'Budget for content production plus monitoring; the largest cost driver is competitive density in the niche.' },
+    { q: `Can ${kw} be fully automated?`, a: 'The pipeline can run agentically end to end, with human review at the plan and quality gates.' },
+    { q: `How is ${kw} measured?`, a: 'Track per-engine citation status weekly alongside Search Console impressions, clicks and average position.' }
+  ];
+}
+
+// Rewrite maps failed criteria to targeted improvements. Rewrites are always
+// symmetry-clean and context-complete — attempt > 1 disables the first-draft
+// imperfections above.
+function rewriteArticle(client, brief, article, failed) {
+  const next = writeArticle(client, brief, article.attempt + 1);
+  next.attempt = article.attempt + 1;
+  if (failed.includes('faq') || article.faq.length < 3) {
+    next.faq = defaultFaq(next.keyword, next.language);
+    if (!next.schemaTypes.includes('FAQPage')) next.schemaTypes.push('FAQPage');
+  }
+  next.wordCount = countWords(next);
+  return next;
+}
+
+function countWords(article) {
+  const text = [
+    article.directAnswer,
+    ...article.sections.map(s => s.heading + ' ' + s.content),
+    ...article.faq.map(f => f.q + ' ' + f.a)
+  ].join(' ');
+  return text.split(/\s+/).filter(Boolean).length;
+}
+
+function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+module.exports = {
+  ENGINES, REQUIRED_BOTS, INTENTS, PROMPT_RUNS,
+  crawlBrandSignals, generatePromptSet, promptRunCheck,
+  expandKeywords, autocomplete, competitorGaps, fanOutQueries,
+  existingSite, scoreExistingPage, queryCitationOwner, findContradictions,
+  gscKeywordData, ga4Data, articleVisitors, citationCheck, botVisits, impressionGaps,
+  robotsTxt, crawlCheck, symmetryCheck, wpUpsertPost, webhookConfirm, verifyPublished,
+  renderLlmsTxt, renderSitemap, ping,
+  writeArticle, rewriteArticle, defaultFaq
+};
+
+});
+
+__define('agents', function (module, exports, require) {
+'use strict';
+// The 7 pipeline agents + the baseline audit (Agent 0). Each is a pure-ish
+// function over client state returning { agent, status, summary, data? } with
+// status PASS | FAIL | NEEDS_REVIEW | ESCALATE_TO_HUMAN.
+// Orchestration (gates, retries, audit, escalations) lives in orchestrator.js.
+const mock = require('./adapters/mock');
+const { uid, slugify, now } = require('./util');
+
+const COMP_RANK = { low: 0, medium: 1, high: 2 };
+
+// Client content language (SPEC §10.1): drives every language-aware adapter.
+function langOf(client) {
+  return client.profile && client.profile.primaryLanguage === 'nl' ? 'nl' : 'en';
+}
+
+// ---- Agent 0: Baseline audit ---------------------------------------------------
+// Runs before any engagement (auto at onboarding, re-runnable): the client's
+// existing pages scored for citability, contradiction scan across the legacy
+// corpus, per-query/per-engine citation ownership incl. whitespace, robots audit.
+// This is the before/after evidence base for retention reporting.
+function baseline(client) {
+  const pages = mock.existingSite(client).map(p => ({
+    ...p,
+    citability: mock.scoreExistingPage(p)
+  }));
+
+  const contradictions = mock.findContradictions(
+    pages.map(p => ({ label: p.url, facts: p.facts })));
+
+  const queries = [];
+  for (const seed of client.keywords) {
+    queries.push(seed, ...mock.fanOutQueries(seed, langOf(client)).slice(0, 2));
+  }
+  const queryBaseline = queries.slice(0, 8).map(q => {
+    const engines = {};
+    for (const e of mock.ENGINES) engines[e] = mock.queryCitationOwner(client, q, e);
+    return { query: q, engines };
+  });
+  const whitespace = queryBaseline
+    .filter(row => Object.values(row.engines).filter(v => v === null).length >= 2)
+    .map(row => row.query);
+
+  const robots = mock.crawlCheck(client);
+  const avgCitability = Math.round(pages.reduce((s, p) => s + p.citability, 0) / pages.length);
+
+  const live = !!(client.crawlCache && client.crawlCache.live);
+  client.baseline = {
+    id: uid('base'),
+    createdAt: now(),
+    live,                                                   // true = real crawl data (v1.2.1)
+    llmsTxt: live ? client.crawlCache.llmsTxt : null,       // real llms.txt presence check
+    crawlErrors: live ? client.crawlCache.errors : [],
+    pages,
+    contradictions,
+    queries: queryBaseline,
+    whitespace,
+    robots,
+    summary: {
+      avgCitability,
+      jsRenderedPages: pages.filter(p => p.jsRendered).length,
+      orphanPages: pages.filter(p => p.orphan).length,
+      pagesWithoutSchema: pages.filter(p => !p.hasSchema).length,
+      contradictionsFound: contradictions.length,
+      whitespaceQueries: whitespace.length
+    }
+  };
+
+  return {
+    agent: 'baseline',
+    status: robots.ok ? 'PASS' : 'ESCALATE_TO_HUMAN',
+    summary: `Baseline audit${live ? ' (LIVE crawl)' : ''}: ${pages.length} existing pages (avg citability ${avgCitability}/100), ` +
+      `${contradictions.length} contradictions, ${whitespace.length}/${queryBaseline.length} queries with citation whitespace, ` +
+      `robots.txt ${robots.ok ? 'allows all AI crawlers' : `BLOCKS ${robots.blocked.join(', ')}`}` +
+      (live && client.baseline.llmsTxt ? `, llms.txt ${client.baseline.llmsTxt.present ? 'present' : 'MISSING'}` : '') + '.',
+    ...(robots.ok ? {} : { escalation: { reason: `Onboarding robots.txt audit: blocks ${robots.blocked.join(', ')}` } })
+  };
+}
+
+// ---- Agent 1: Research -------------------------------------------------------
+function research(client) {
+  const keywords = [];
+  for (const seed of client.keywords) {
+    keywords.push(...mock.expandKeywords(seed, langOf(client)));
+    keywords.push(...mock.autocomplete(seed, langOf(client)));
+  }
+  keywords.push(...mock.competitorGaps(client.competitors, client.niche, langOf(client)));
+
+  // gaps fed back from Monitor/Optimize — the loop never stops. Citation
+  // whitespace (queries where no one is cited) is the cheapest win and is
+  // tagged so the plan shows where each keyword came from.
+  for (const gap of client.pendingGaps) {
+    keywords.push({
+      keyword: gap.query, volume: gap.impressions, competition: 'low',
+      cpc: 0, intent: 'ai',
+      source: gap.type === 'whitespace' ? 'citation_whitespace' : 'gap_feedback'
+    });
+  }
+  const consumedGaps = client.pendingGaps.length;
+  client.pendingGaps = [];
+
+  for (const k of keywords) {
+    k.fanOut = mock.fanOutQueries(k.keyword, langOf(client));
+    // score: relevance-weighted, low competition boosted (long-tail first);
+    // whitespace queries get a bonus — nobody is cited there yet
+    k.score = Math.round((2 - COMP_RANK[k.competition]) * 40 + Math.min(k.volume / 100, 20))
+      + (k.source === 'citation_whitespace' ? 15 : 0);
+  }
+
+  // topical map: one hub-and-spoke cluster per seed
+  const clusters = client.keywords.map(seed => {
+    const members = keywords.filter(k => k.keyword.includes(seed));
+    return {
+      id: uid('cluster'),
+      topic: seed,
+      pillar: seed,
+      spokes: members.filter(k => k.keyword !== seed).map(k => k.keyword)
+    };
+  });
+  const extras = keywords.filter(k => !client.keywords.some(s => k.keyword.includes(s)));
+  if (extras.length) {
+    clusters.push({
+      id: uid('cluster'), topic: langOf(client) === 'nl' ? `${client.niche} kansen` : `${client.niche} opportunities`,
+      pillar: extras[0].keyword, spokes: extras.slice(1).map(k => k.keyword)
+    });
+  }
+
+  // long-tail first, non-negotiable: high competition excluded from month 1
+  const prioritized = keywords
+    .filter(k => k.competition !== 'high')
+    .sort((a, b) => COMP_RANK[a.competition] - COMP_RANK[b.competition] || b.score - a.score)
+    .slice(0, 12)
+    .map(k => ({
+      keyword: k.keyword, competition: k.competition, volume: k.volume,
+      intent: k.intent, score: k.score, source: k.source,
+      clusterId: (clusters.find(c => k.keyword.includes(c.topic)) || clusters[clusters.length - 1]).id
+    }));
+
+  // contradiction scan across everything already live for this client —
+  // published articles plus legacy baseline pages (July update §4: flag
+  // articles in the existing content that contradict each other)
+  const corpus = client.articles.filter(a => a.publishedUrl)
+    .map(a => ({ label: a.slug, facts: a.facts }))
+    .concat((client.baseline ? client.baseline.pages : []).map(p => ({ label: p.url, facts: p.facts })));
+  const contradictions = mock.findContradictions(corpus);
+
+  client.plan = {
+    id: uid('plan'),
+    version: (client.plan ? client.plan.version : 0) + 1,
+    createdAt: now(),
+    status: 'pending_approval',
+    keywords,
+    clusters,
+    prioritizedArticles: prioritized,
+    gapKeywordsConsumed: consumedGaps,
+    contradictions
+  };
+  client.briefs = [];
+
+  // Prompt set (SPEC §10.2): generated once from the approved brand profile,
+  // intent-grouped, in the client's primary language. An approved set is
+  // stable across re-research; only a rejected set is regenerated.
+  let promptNote = '';
+  if (!client.promptSet || client.promptSet.status === 'rejected') {
+    const prevVersion = client.promptSet ? client.promptSet.version : 0;
+    client.promptSet = mock.generatePromptSet(client, prevVersion + 1);
+    promptNote = ` Prompt set v${client.promptSet.version} generated ` +
+      `(${client.promptSet.total} prompts, ${client.promptSet.groups.length} intent groups) — pending specialist approval.`;
+  }
+
+  return {
+    agent: 'research', status: 'NEEDS_REVIEW',
+    summary: `Content plan v${client.plan.version}: ${keywords.length} keywords, ` +
+      `${clusters.length} clusters, ${prioritized.length} prioritized articles ` +
+      `(${consumedGaps} gap keywords fed back), ${contradictions.length} corpus contradictions flagged. ` +
+      'Pending specialist approval.' + promptNote
+  };
+}
+
+// ---- Agent 2: Brief ----------------------------------------------------------
+function brief(client) {
+  if (!client.plan) return { agent: 'brief', status: 'FAIL', summary: 'No content plan. Run Research first.' };
+  if (client.plan.status !== 'approved') {
+    return { agent: 'brief', status: 'FAIL', summary: `Content plan is ${client.plan.status}. Specialist approval required before briefing.` };
+  }
+  client.briefs = client.plan.prioritizedArticles.map((item, index) => {
+    const cluster = client.plan.clusters.find(c => c.id === item.clusterId);
+    // hub-and-spoke: spoke articles link to the pillar + siblings; the pillar
+    // links to its spokes. Small clusters are padded with other pillars so
+    // every article still gets >=3 internal link targets (no self-links).
+    // Targets carry sameCluster so the writer/quality can enforce topical
+    // coherence (Signal Clarity: connected knowledge network, not islands).
+    const own = [cluster.pillar, ...cluster.spokes].filter(t => t !== item.keyword);
+    const other = client.plan.clusters.filter(c => c.id !== cluster.id).map(c => c.pillar);
+    const seen = new Set();
+    const targets = [];
+    for (const [list, sameCluster] of [[own, true], [other, false]]) {
+      for (const t of list) {
+        const slug = slugify(t);
+        if (t === item.keyword || seen.has(slug)) continue;
+        seen.add(slug);
+        targets.push({ slug, sameCluster });
+        if (targets.length >= 5) break;
+      }
+      if (targets.length >= 5) break;
+    }
+    return {
+      id: uid('brief'),
+      index,
+      clusterId: cluster.id,
+      clusterTopic: cluster.topic,
+      isPillar: item.keyword === cluster.pillar,
+      targetKeywords: [item.keyword, ...mock.fanOutQueries(item.keyword, langOf(client)).slice(0, 2)],
+      wordCount: 2200,
+      headings: client.profile && client.profile.primaryLanguage === 'nl' ? [
+        `Wat ${item.keyword} precies betekent`,
+        `Waarom ${item.keyword} belangrijk is voor ${client.niche}`,
+        `Stap voor stap: zo pak je ${item.keyword} aan`,
+        'Veelgemaakte fouten en hoe je ze voorkomt',
+        'Benchmarks, hulpmiddelen en vergelijkingen',
+        'FAQ'
+      ] : [
+        `What ${item.keyword} actually means`,
+        `Why ${item.keyword} matters for ${client.niche}`,
+        `How to approach ${item.keyword} step by step`,
+        'Common mistakes and how to avoid them',
+        'Benchmarks, tools and comparisons',
+        'FAQ'
+      ],
+      internalLinkTargets: targets,
+      schemaType: item.keyword === cluster.pillar ? 'Article' : 'BlogPosting',
+      competitorUrls: client.competitors,
+      uniqueAngle: client.profile && client.profile.primaryLanguage === 'nl'
+        ? `de blik van de ${['behandelaar', 'patiënt', 'auditor', 'scepticus'][index % 4]} op ${item.keyword}, ` +
+          `een invalshoek die concurrenten binnen ${client.niche} niet gebruiken`
+        : `the ${['operator', 'buyer', 'auditor', 'skeptic'][index % 4]}'s view of ${item.keyword}, ` +
+          `an angle competitors covering ${client.niche} are not using`,
+      createdAt: now()
+    };
+  });
+  return {
+    agent: 'brief', status: 'PASS',
+    summary: `${client.briefs.length} content briefs generated from approved plan v${client.plan.version}.`
+  };
+}
+
+// ---- Agent 3: Writer ---------------------------------------------------------
+function writer(client) {
+  if (!client.briefs.length) return { agent: 'writer', status: 'FAIL', summary: 'No briefs. Run Brief first.' };
+  let written = 0, rewritten = 0;
+  for (const b of client.briefs) {
+    const existing = client.articles.find(a => a.briefId === b.id);
+    if (!existing) {
+      const draft = mock.writeArticle(client, b, 1);
+      client.articles.push({
+        id: uid('art'), briefId: b.id, clusterId: b.clusterId,
+        status: 'draft', version: 1, feedback: null,
+        visibility: 'hidden', webhookStatus: null, ...draft
+      });
+      written++;
+    } else if (existing.status === 'draft' && existing.feedback) {
+      const redraft = mock.rewriteArticle(client, b, existing, existing.feedback.failed || []);
+      Object.assign(existing, redraft, { status: 'draft', feedback: null });
+      rewritten++;
+    }
+  }
+  if (!written && !rewritten) {
+    return { agent: 'writer', status: 'PASS', summary: 'Nothing to write: all briefs already have current drafts.' };
+  }
+  return {
+    agent: 'writer', status: 'PASS',
+    summary: `${written} drafts written${rewritten ? `, ${rewritten} rewritten after feedback` : ''}. ` +
+      'Signal-Clarity structured: direct answer, entities, sourced facts, schema, semantic relationship links.'
+  };
+}
+
+// ---- Agent 4: Quality — Signal Clarity rubric v2 (SPEC §5) ---------------------
+const RUBRIC_WEIGHTS = {
+  directAnswer: 10, entityDensity: 10, factDensity: 10, faq: 10,
+  structuredAnswers: 10, schemaReadiness: 10, uniqueAngle: 10, wordCount: 10,
+  semanticLinks: 10, topicalCoherence: 10
+};
+
+function scoreArticle(a, weights) {
+  const W = { ...RUBRIC_WEIGHTS, ...(weights || {}) };
+  const part = (w, frac) => Math.round(w * frac);
+  const breakdown = {};
+  const failed = [];
+  const daWords = (a.directAnswer || '').split(/\s+/).filter(Boolean).length;
+  breakdown.directAnswer = a.directAnswer && daWords <= 150 && daWords >= 20 ? W.directAnswer : 0;
+  breakdown.entityDensity = Math.min(W.entityDensity, part(W.entityDensity, a.entities.length / 8));
+  breakdown.factDensity = Math.min(W.factDensity, part(W.factDensity, a.facts.length / 5));
+  breakdown.faq = a.faq.length >= 3 ? W.faq : (a.faq.length > 0 ? part(W.faq, 0.5) : 0);
+  breakdown.structuredAnswers = a.structuredBlocks >= 2 ? W.structuredAnswers
+    : (a.structuredBlocks >= 1 ? part(W.structuredAnswers, 0.5) : 0);
+  const hasArticleSchema = a.schemaTypes.some(t => t === 'Article' || t === 'BlogPosting');
+  const hasAuthor = a.schemaTypes.includes('Person');
+  const hasFaqSchema = a.schemaTypes.includes('FAQPage');
+  breakdown.schemaReadiness = hasArticleSchema && hasAuthor
+    ? (hasFaqSchema ? W.schemaReadiness : part(W.schemaReadiness, 0.4)) : 0;
+  breakdown.uniqueAngle = (a.uniqueAngle && a.uniqueAngle.length > 10) || (a.angle && a.angle.length > 10)
+    ? W.uniqueAngle : 0;
+  breakdown.wordCount = a.wordCount >= 2000 ? W.wordCount : (a.wordCount >= 1500 ? part(W.wordCount, 0.5) : 0);
+  // Semantic relationship links: every internal link must explain HOW the two
+  // pieces relate — a conceptual bridge, not bare anchor text.
+  const links = a.internalLinks || [];
+  const withContext = links.filter(l => typeof l === 'object' && l.context && l.context.length >= 40).length;
+  breakdown.semanticLinks = links.length && withContext === links.length ? W.semanticLinks
+    : (withContext > 0 ? part(W.semanticLinks, 0.5) : 0);
+  // Topical coherence: the article belongs to a cluster and links stay inside it.
+  const sameCluster = links.filter(l => typeof l === 'object' && l.sameCluster).length;
+  breakdown.topicalCoherence = a.clusterId && sameCluster >= 2 ? W.topicalCoherence
+    : (a.clusterId && sameCluster >= 1 ? part(W.topicalCoherence, 0.5) : 0);
+
+  for (const [k, v] of Object.entries(breakdown)) if (v < W[k]) failed.push(k);
+  const total = Object.values(breakdown).reduce((s, v) => s + v, 0);
+  return { total, breakdown, failed };
+}
+
+// Contradiction check v1 (July update §4). Two tiers:
+//  - vs the pipeline's own published corpus: severe conflicts BLOCK the draft
+//    (we must never disagree with ourselves — that is the Signal Clarity
+//    consistency requirement).
+//  - vs legacy baseline pages: advisory only. Legacy conflicts are a property
+//    of the old content, already flagged by the baseline audit and the plan;
+//    the remedy is updating/removing the legacy page, not blocking new work.
+function contradictionCheck(client, article) {
+  const draftLabel = `draft:${article.slug}`;
+  const mine = (c) => c.a.label === draftLabel || c.b.label === draftLabel;
+  const published = client.articles
+    .filter(x => x.publishedUrl && x.id !== article.id)
+    .map(x => ({ label: x.slug, facts: x.facts }));
+  const legacy = (client.baseline ? client.baseline.pages : [])
+    .map(p => ({ label: p.url, facts: p.facts }));
+  const draft = { label: draftLabel, facts: article.facts };
+  const vsPublished = mock.findContradictions(published.concat([draft])).filter(mine);
+  const vsLegacy = mock.findContradictions(legacy.concat([draft])).filter(mine);
+  return {
+    severe: vsPublished.filter(c => c.severe),
+    advisory: vsPublished.filter(c => !c.severe).concat(vsLegacy)
+  };
+}
+
+// ---- Agent 5: Publish ----------------------------------------------------------
+function publish(client) {
+  const approved = client.articles.filter(a => a.status === 'approved');
+  if (!approved.length) {
+    return { agent: 'publish', status: 'FAIL', summary: 'No approved articles to publish.' };
+  }
+  // crawl accessibility check comes first — publishing to a site AI crawlers
+  // cannot read is wasted work (all six required bots, July update §2.3)
+  const crawl = mock.crawlCheck(client);
+  if (!crawl.ok) {
+    return {
+      agent: 'publish', status: 'ESCALATE_TO_HUMAN',
+      summary: `robots.txt blocks AI crawlers (${crawl.blocked.join(', ')}). Nothing published.`,
+      escalations: [{ reason: `robots.txt blocks required AI crawlers: ${crawl.blocked.join(', ')}` }]
+    };
+  }
+
+  const urls = [];
+  const held = [];
+  const escalations = [];
+  let webhookFailures = 0, verificationFailures = 0;
+
+  for (const a of approved) {
+    // Symmetry gate (July update §1.4): JSON-LD must match the DOM exactly.
+    // A mismatch is an ambiguous signal — flag it before the page goes live.
+    const sym = mock.symmetryCheck(a);
+    if (!sym.ok) {
+      a.status = 'draft';
+      a.feedback = { source: 'publish', failed: ['symmetryGate'], note: sym.mismatches.join('; ') };
+      held.push({ slug: a.slug, mismatches: sym.mismatches });
+      continue;
+    }
+
+    a.publishedAt = a.publishedAt || now();
+    const post = mock.wpUpsertPost(client, a);   // published but NOT in navigation
+    a.publishedUrl = post.url;
+    a.status = 'published';
+    if (!a.visibility) a.visibility = 'hidden';  // republish keeps an earned 'visible'
+    urls.push(post.url);
+
+    // Webhook confirmation: the plugin must confirm the post is live.
+    const hook = mock.webhookConfirm(client, a);
+    a.webhookStatus = hook.confirmed ? 'confirmed' : 'pending';
+    if (!hook.confirmed) {
+      webhookFailures++;
+      escalations.push({ reason: `No publish-confirmation webhook received for "${a.title}" — post may not be live on the client site.`, articleId: a.id });
+    }
+
+    // Post-publish verification: 200 + full article present as static HTML.
+    const check = mock.verifyPublished(client, a);
+    a.verification = check;
+    if (!check.ok) {
+      verificationFailures++;
+      escalations.push({ reason: `Published page failed crawl verification for "${a.title}": ${Object.entries(check.checks).filter(([, v]) => !v).map(([k]) => k).join(', ')}.`, articleId: a.id });
+    }
+  }
+
+  if (urls.length) {
+    client.wp.llmsTxt = mock.renderLlmsTxt(client);   // updated after every publication
+    client.wp.sitemap = mock.renderSitemap(client);   // clustered, pillar first
+    mock.ping(client, 'indexnow', urls);              // Bing / Yandex / Naver
+    mock.ping(client, 'gsc', urls);                   // Google Search Console
+  }
+
+  const bits = [`${urls.length} articles live as hidden posts (sitemap + llms.txt discovery, not in navigation)`];
+  if (held.length) bits.push(`${held.length} held by the symmetry gate and returned to the writer`);
+  if (webhookFailures) bits.push(`${webhookFailures} without publish confirmation`);
+  if (verificationFailures) bits.push(`${verificationFailures} failed static-HTML verification`);
+  const status = (webhookFailures || verificationFailures) ? 'ESCALATE_TO_HUMAN'
+    : held.length ? 'NEEDS_REVIEW'
+    : urls.length ? 'PASS' : 'FAIL';
+  return {
+    agent: 'publish', status,
+    summary: bits.join('; ') + '.',
+    ...(escalations.length ? { escalations } : {}),
+    data: { held }
+  };
+}
+
+// ---- Agent 6: Monitor ------------------------------------------------------------
+function monitor(client) {
+  const published = client.articles.filter(a => a.publishedUrl);
+  if (!published.length) {
+    return { agent: 'monitor', status: 'FAIL', summary: 'Nothing published to monitor yet.' };
+  }
+  client.monitorRuns += 1;
+  const run = client.monitorRuns;
+  const prev = client.reports[client.reports.length - 1] || null;
+
+  const keywords = client.plan.prioritizedArticles.map(k =>
+    mock.gscKeywordData(client.id, k.keyword, run));
+  const firstSlug = [...published].sort((a, b) => a.slug.localeCompare(b.slug))[0].slug;
+  const citations = published.map(a => {
+    const engines = {};
+    for (const e of mock.ENGINES) {
+      engines[e] = mock.citationCheck(client.id, a.slug, e, run, a.slug === firstSlug);
+    }
+    return { articleId: a.id, slug: a.slug, title: a.title, engines };
+  });
+
+  // Query-citation ownership: per query per engine — client, competitor, or
+  // NOBODY. Queries nobody owns are citation whitespace: the cheapest wins.
+  const queryCitations = client.plan.prioritizedArticles.map(k => {
+    const engines = {};
+    for (const e of mock.ENGINES) engines[e] = mock.queryCitationOwner(client, k.keyword, e, run);
+    return { query: k.keyword, engines };
+  });
+  const whitespace = queryCitations
+    .filter(row => Object.values(row.engines).filter(v => v === null).length >= 2)
+    .map(row => ({ query: row.query, type: 'whitespace' }));
+
+  // drop detection: cited→uncited per engine, or ranking drop > sensitivity
+  const droppedPages = [];
+  if (prev) {
+    for (const row of citations) {
+      const prevRow = prev.citations.find(r => r.articleId === row.articleId);
+      if (!prevRow) continue;
+      const lost = mock.ENGINES.filter(e => prevRow.engines[e] && !row.engines[e]);
+      if (lost.length) {
+        droppedPages.push({ articleId: row.articleId, slug: row.slug, reason: `lost citation on ${lost.join(', ')}` });
+      }
+    }
+    for (const kwRow of keywords) {
+      const prevKw = prev.keywords.find(k => k.keyword === kwRow.keyword);
+      if (prevKw && kwRow.position - prevKw.position > client.thresholds.dropSensitivity) {
+        const art = published.find(a => a.keyword === kwRow.keyword);
+        if (art && !droppedPages.some(d => d.articleId === art.id)) {
+          droppedPages.push({ articleId: art.id, slug: art.slug, reason: `ranking dropped ${prevKw.position}→${kwRow.position}` });
+        }
+      }
+    }
+  }
+  for (const d of droppedPages) {
+    const art = client.articles.find(a => a.id === d.articleId);
+    if (art) art.status = 'flagged';
+  }
+
+  // Hidden-post traffic thresholds (July update §2.1): when a hidden article
+  // crosses the visitor threshold, notify the client so they can choose to
+  // make it publicly visible. One notification per article.
+  const visitors = published.map(a => ({
+    articleId: a.id, slug: a.slug,
+    visitors: mock.articleVisitors(client.id, a.slug, run)
+  }));
+  const newNotifications = [];
+  for (const v of visitors) {
+    const art = client.articles.find(a => a.id === v.articleId);
+    if (!art || art.visibility !== 'hidden') continue;
+    if (v.visitors < client.thresholds.visitorThreshold) continue;
+    if (client.notifications.some(n => n.articleId === art.id)) continue;
+    const n = {
+      id: uid('notif'), articleId: art.id, slug: art.slug, title: art.title,
+      type: 'traffic_threshold', visitors: v.visitors,
+      windowDays: client.thresholds.visitorWindowDays,
+      status: 'pending', createdAt: now()
+    };
+    client.notifications.push(n);
+    newNotifications.push(n);
+  }
+
+  // Prompt tracking (SPEC §10.3) — volatility-aware: only against an APPROVED
+  // prompt set, multiple runs per prompt, mention rate and citation rate as
+  // separate metrics, 4-week rolling averages, baseline before/after anchor.
+  const promptTracking = client.promptSet && client.promptSet.status === 'approved'
+    ? trackPrompts(client, run) : null;
+
+  const report = {
+    id: uid('rep'),
+    week: run,
+    createdAt: now(),
+    status: 'pending_review',
+    keywords,
+    ga4: mock.ga4Data(client.id, run),
+    citations,
+    queryCitations,
+    whitespace,
+    visitors,
+    botVisits: mock.botVisits(client.id, run),
+    droppedPages,
+    newGaps: mock.impressionGaps(client.niche, run, langOf(client)),
+    ...(promptTracking ? { promptTracking } : {})
+  };
+  client.reports.push(report);
+
+  const citedCount = citations.reduce((s, r) => s + Object.values(r.engines).filter(Boolean).length, 0);
+  const ptBit = promptTracking
+    ? ` Prompt tracking: ${promptTracking.promptCount} prompts × ${mock.ENGINES.length} engines × ${promptTracking.runsPerPrompt} runs — ` +
+      `mention rate ${Math.round(promptTracking.weekly.mentionRate * 100)}%, citation rate ${Math.round(promptTracking.weekly.citationRate * 100)}% ` +
+      `(rolling ${promptTracking.rolling.weeks.length}-week avg ${Math.round(promptTracking.rolling.citationRate * 100)}%).`
+    : '';
+  return {
+    agent: 'monitor', status: 'NEEDS_REVIEW',
+    summary: `Weekly report #${run}: ${citedCount}/${citations.length * mock.ENGINES.length} engine citations, ` +
+      `${droppedPages.length} dropped pages flagged, ${whitespace.length} whitespace queries (nobody cited), ` +
+      `${report.newGaps.length} new gaps, ${newNotifications.length} traffic-threshold notifications.${ptBit} Pending specialist review.`
+  };
+}
+
+// Prompt tracking aggregation for one monitor run (SPEC §10.3). Every prompt ×
+// engine is sampled PROMPT_RUNS times; rates are means over the runs. Rolling
+// block averages the weekly rates over the last ≤4 reports (incl. this one) —
+// raw week-over-week numbers are never presented alone.
+function trackPrompts(client, run) {
+  const runs = mock.PROMPT_RUNS;
+  const results = [];
+  const byIntentAcc = new Map();
+  let mentionSum = 0, citeSum = 0, cells = 0;
+  for (const group of client.promptSet.groups) {
+    if (!byIntentAcc.has(group.intent)) byIntentAcc.set(group.intent, { m: 0, c: 0, n: 0, prompts: 0 });
+    const acc = byIntentAcc.get(group.intent);
+    for (const prompt of group.prompts) {
+      const engines = {};
+      for (const e of mock.ENGINES) {
+        let m = 0, c = 0;
+        for (let i = 0; i < runs; i++) {
+          const out = mock.promptRunCheck(client.id, prompt.text, e, run, i);
+          if (out.mentioned) m++;
+          if (out.cited) c++;
+        }
+        engines[e] = { mentionRate: m / runs, citationRate: c / runs };
+        mentionSum += m / runs; citeSum += c / runs; cells++;
+        acc.m += m / runs; acc.c += c / runs; acc.n++;
+      }
+      acc.prompts++;
+      results.push({ promptId: prompt.id, prompt: prompt.text, intent: group.intent, engines });
+    }
+  }
+  const weekly = {
+    mentionRate: mentionSum / cells,
+    citationRate: citeSum / cells
+  };
+  const prev = client.reports.filter(r => r.promptTracking).slice(-3);
+  const windowRates = prev.map(r => r.promptTracking.weekly).concat([weekly]);
+  const rolling = {
+    weeks: prev.map(r => r.week).concat([run]),
+    mentionRate: windowRates.reduce((s, w) => s + w.mentionRate, 0) / windowRates.length,
+    citationRate: windowRates.reduce((s, w) => s + w.citationRate, 0) / windowRates.length
+  };
+  // Baseline anchor: the share of baseline query × engine cells where the
+  // client was already cited before the engagement (Agent 0).
+  let baseline = { citationRate: 0, queries: 0 };
+  if (client.baseline) {
+    let bCells = 0, bCited = 0;
+    for (const row of client.baseline.queries) {
+      for (const owner of Object.values(row.engines)) { bCells++; if (owner === 'client') bCited++; }
+    }
+    baseline = { citationRate: bCells ? bCited / bCells : 0, queries: client.baseline.queries.length };
+  }
+  return {
+    promptSetId: client.promptSet.id,
+    promptCount: client.promptSet.total,
+    runsPerPrompt: runs,
+    weekly,
+    rolling,
+    baseline,
+    byIntent: [...byIntentAcc.entries()].map(([intent, a]) => ({
+      intent, prompts: a.prompts, mentionRate: a.m / a.n, citationRate: a.c / a.n
+    })),
+    results
+  };
+}
+
+// ---- Agent 7: Optimize -------------------------------------------------------------
+function optimize(client) {
+  const latest = client.reports[client.reports.length - 1];
+  if (!latest) return { agent: 'optimize', status: 'FAIL', summary: 'No performance report. Run Monitor first.' };
+  if (latest.status !== 'approved') {
+    return { agent: 'optimize', status: 'FAIL', summary: 'Latest report is pending specialist review. Approve it before optimizing.' };
+  }
+  const flagged = client.articles.filter(a => a.status === 'flagged');
+  const log = [];
+  const urls = [];
+  for (const a of flagged) {
+    // ranking drop response: rewrite intro, refresh facts, extend FAQ, reinforce links
+    a.directAnswer = a.directAnswer.replace(/^/, `Updated ${new Date().getFullYear()}: `);
+    if (a.faq.length < 4) a.faq = mock.defaultFaq(a.keyword, a.language);
+    a.faq = a.faq.concat([a.language === 'nl' ? {
+      q: `Wat is er recent veranderd rond ${a.keyword}?`,
+      a: 'Deze pagina is ververst met actuele cijfers, een uitgebreidere FAQ en versterkte interne links nadat een citatiedaling werd gesignaleerd.'
+    } : {
+      q: `What changed recently in ${a.keyword}?`,
+      a: 'This page was refreshed with updated statistics, extended FAQ coverage and reinforced internal links after a citation drop was detected.'
+    }]);
+    if (!a.schemaTypes.includes('FAQPage')) a.schemaTypes.push('FAQPage');
+    a.facts = a.facts.map(f => ({ ...f, year: Math.max(f.year || 0, new Date().getFullYear() - 1) }));
+    if (a.internalLinks.length < 5) {
+      const target = slugify(client.niche);
+      a.internalLinks = a.internalLinks.concat([{
+        target,
+        context: `The wider context for this refresh sits in our overview of ${client.niche}, which frames where ${a.keyword} fits in the broader operating decisions a team makes.`,
+        sameCluster: false
+      }]);
+    }
+    a.version += 1;
+    a.optimizedAt = now();
+    a.status = 'published';
+    const post = mock.wpUpsertPost(client, a);
+    urls.push(post.url);
+    log.push({ articleId: a.id, slug: a.slug, actions: ['intro rewritten', 'FAQ extended', 'facts refreshed', 'internal links reinforced'], version: a.version });
+  }
+  if (urls.length) {
+    client.wp.llmsTxt = mock.renderLlmsTxt(client);
+    client.wp.sitemap = mock.renderSitemap(client);
+    mock.ping(client, 'indexnow', urls);
+    mock.ping(client, 'gsc', urls);
+  }
+  // feed newly identified gaps AND citation whitespace back to Agent 1 —
+  // closes the loop; whitespace queries are the cheapest wins in the niche
+  const gaps = latest.newGaps || [];
+  const whitespace = latest.whitespace || [];
+  client.pendingGaps.push(...gaps);
+  client.pendingGaps.push(...whitespace.map(w => ({ query: w.query, impressions: 150, type: 'whitespace' })));
+  client.optimizationLog.push({
+    ts: now(), reportId: latest.id, pages: log,
+    gapsFedBack: gaps.length + whitespace.length
+  });
+  return {
+    agent: 'optimize', status: 'PASS',
+    summary: `${log.length} flagged pages optimized and republished; ${gaps.length} content gaps and ` +
+      `${whitespace.length} whitespace queries fed back to Research.`,
+    data: { log }
+  };
+}
+
+module.exports = { baseline, research, brief, writer, scoreArticle, contradictionCheck, publish, monitor, optimize, RUBRIC_WEIGHTS };
+
+});
+
+__define('orchestrator', function (module, exports, require) {
+'use strict';
+// Orchestration layer: client lifecycle, stage running, human gates,
+// quality→writer retry loop, escalations, visibility decisions, and the
+// central audit log.
+const agents = require('./agents');
+const mock = require('./adapters/mock');
+const { uid, now } = require('./util');
+
+const STAGES = ['baseline', 'research', 'brief', 'writer', 'quality', 'publish', 'monitor', 'optimize', 'full'];
+
+const DEFAULT_THRESHOLDS = {
+  qualityMin: 85,        // Quality Agent minimum Signal Clarity score
+  maxWriterAttempts: 3,  // rewrites before ESCALATE_TO_HUMAN
+  dropSensitivity: 5,    // ranking positions lost before a page is flagged
+  visitorThreshold: 5,   // visitors that trigger a visibility notification
+  visitorWindowDays: 7   // window for the visitor threshold
+};
+
+function audit(client, agent, status, summary, detail) {
+  client.audit.push({ ts: now(), agent, status, summary, ...(detail ? { detail } : {}) });
+}
+
+function escalate(client, source, reason, articleId) {
+  const esc = {
+    id: uid('esc'), clientId: client.id, source, reason,
+    articleId: articleId || null, status: 'open', createdAt: now()
+  };
+  client.escalations.push(esc);
+  audit(client, source, 'ESCALATE_TO_HUMAN', reason, articleId ? `article ${articleId}` : undefined);
+  // production: push notification to the relevant Aureva team member here
+  return esc;
+}
+
+// Brand profile draft (SPEC §10.1): intake + mock site-crawl signals. Deep
+// intake (a companyDescription) opens the mandatory human approval gate;
+// minimal v1.1 onboarding auto-approves a thin profile so nothing breaks.
+function draftProfile(input, version) {
+  const deep = !!input.companyDescription;
+  const languages = (Array.isArray(input.languages) && input.languages.length)
+    ? input.languages.filter(l => ['nl', 'en'].includes(l)) : ['en'];
+  return {
+    version: version || 1,
+    status: deep ? 'pending_approval' : 'approved',
+    autoApproved: !deep,
+    companyDescription: input.companyDescription || `${input.name} — ${input.niche}`,
+    toneOfVoice: input.toneOfVoice || input.brandVoice || 'professional and clear',
+    brandRules: Array.isArray(input.brandRules) ? input.brandRules : [],
+    languages,
+    primaryLanguage: ['nl', 'en'].includes(input.primaryLanguage) ? input.primaryLanguage : languages[0],
+    audiences: Array.isArray(input.audiences) ? input.audiences : [],
+    regulated: !!input.regulated,
+    industry: input.industry || input.niche,
+    // live seam: prefer signals from a real crawl over the mock
+    crawlSignals: (input.crawlCache && input.crawlCache.brandSignals) || mock.crawlBrandSignals(input.domain),
+    draftedAt: now()
+  };
+}
+
+function createClient(store, input) {
+  const required = ['name', 'domain', 'niche', 'keywords', 'competitors'];
+  for (const f of required) {
+    if (!input[f] || (Array.isArray(input[f]) && !input[f].length)) {
+      const err = new Error(`Missing required field: ${f}`);
+      err.status = 400;
+      throw err;
+    }
+  }
+  const profile = draftProfile(input);
+  const client = {
+    id: uid('client'),
+    apiKey: uid('key'),
+    reportToken: uid('rt'),   // shareable-link secret for the web report
+    name: input.name,
+    domain: input.domain,
+    niche: input.niche,
+    keywords: input.keywords,
+    competitors: input.competitors,
+    brandVoice: input.brandVoice || 'professional and clear',
+    reviewMode: input.reviewMode === 'client_review' ? 'client_review' : 'auto',
+    thresholds: { ...DEFAULT_THRESHOLDS, ...(input.thresholds || {}) },
+    simulateRobotsBlock: !!input.simulateRobotsBlock,
+    simulateWebhookFailure: !!input.simulateWebhookFailure,
+    createdAt: now(),
+    crawlCache: input.crawlCache || null, // live-crawl result (v1.2.1), null = mock crawler
+    profile,
+    promptSet: null,
+    baseline: null,
+    plan: null,
+    briefs: [],
+    articles: [],
+    reports: [],
+    notifications: [],
+    escalations: [],
+    optimizationLog: [],
+    pendingGaps: [],
+    monitorRuns: 0,
+    audit: [],
+    wp: { posts: [], llmsTxt: '', sitemap: '', pings: [] }
+  };
+  audit(client, 'system', 'INFO', `Client onboarded (${client.reviewMode} mode). Plugin API key issued.`);
+  if (client.crawlCache && client.crawlCache.live) {
+    const cc = client.crawlCache;
+    audit(client, 'system', 'INFO',
+      `LIVE crawl of ${cc.origin}: ${cc.pages.length} pages fetched, ` +
+      `robots.txt ${cc.robotsCheck.ok ? 'allows all required AI crawlers' : 'BLOCKS ' + cc.robotsCheck.blocked.join(', ')}, ` +
+      `llms.txt ${cc.llmsTxt.present ? 'present' : 'MISSING'}, sitemap ${cc.sitemapFound ? 'found' : 'not found'}.` +
+      (cc.errors.length ? ` ${cc.errors.length} fetch error(s) noted.` : ''));
+  }
+  audit(client, 'system', 'INFO', profile.status === 'approved'
+    ? 'Brand profile v1 auto-approved (minimal intake — no deep onboarding fields provided).'
+    : `Brand profile v1 drafted from intake + site crawl — pending specialist approval ` +
+      `(${profile.regulated ? `regulated industry: ${profile.industry}; ` : ''}languages: ${profile.languages.join(', ')}; ` +
+      `${profile.audiences.length} target audiences). Content is blocked until approval.`);
+  store.addClient(client);
+  // Agent 0 runs before any engagement: the baseline is the before/after
+  // evidence base, and the robots audit catches blocked crawlers on day one.
+  const base = agents.baseline(client);
+  audit(client, 'baseline', base.status, base.summary);
+  if (base.status === 'ESCALATE_TO_HUMAN' && base.escalation) {
+    escalate(client, 'baseline', base.escalation.reason);
+  }
+  store.save();
+  return client;
+}
+
+// Quality stage with the retry loop: below threshold → back to Writer with
+// failed criteria, up to maxWriterAttempts, then ESCALATE_TO_HUMAN. Also the
+// contradiction gate: severe conflicts with the live corpus block the draft.
+function runQuality(client) {
+  const drafts = client.articles.filter(a => a.status === 'draft');
+  if (!drafts.length) return { agent: 'quality', status: 'FAIL', summary: 'No drafts to score.' };
+  const { qualityMin, maxWriterAttempts, rubricWeights } = client.thresholds;
+  let approved = 0, gated = 0, escalated = 0, retries = 0, contradictionsFound = 0;
+
+  // Hard requirements independent of score: semantic-link contexts (July
+  // update §1.5) and, for regulated clients, the compliance disclaimer
+  // (SPEC §10.1 — the pipeline must know the industry is regulated).
+  const bareLinks = (a) => (a.internalLinks || [])
+    .some(l => typeof l !== 'object' || !l.context || l.context.length < 40);
+  const regulated = !!(client.profile && client.profile.regulated);
+  const hardFails = (a) => {
+    const f = [];
+    if (bareLinks(a)) f.push('semanticLinks');
+    if (regulated && !(a.compliance && a.compliance.disclaimerPresent)) f.push('compliance');
+    return f;
+  };
+
+  for (const a of drafts) {
+    let result = agents.scoreArticle(a, rubricWeights);
+    while ((result.total < qualityMin || hardFails(a).length) && a.attempt < maxWriterAttempts) {
+      const failed = [...new Set([...result.failed, ...hardFails(a)])];
+      audit(client, 'quality', 'FAIL',
+        `"${a.title}" scored ${result.total}/${qualityMin} — returned to writer (attempt ${a.attempt}). Failed: ${failed.join(', ')}` +
+        (failed.includes('compliance') ? ` (mandatory ${client.profile.industry} disclaimer missing — regulated industry)` : ''));
+      const brief = client.briefs.find(b => b.id === a.briefId);
+      const redraft = mock.rewriteArticle(client, brief, a, result.failed);
+      Object.assign(a, redraft);
+      retries++;
+      result = agents.scoreArticle(a, rubricWeights);
+    }
+    a.score = result.total;
+    a.scoreBreakdown = result.breakdown;
+    if (result.total < qualityMin || hardFails(a).length) {
+      a.status = 'escalated';
+      escalated++;
+      escalate(client, 'quality',
+        `"${a.title}" scored ${result.total}/${qualityMin} after ${a.attempt} attempts. Failed: ${result.failed.join(', ')}`,
+        a.id);
+      continue;
+    }
+    // Contradiction check v1: the draft must not disagree with what is
+    // already live (published corpus + legacy baseline pages).
+    const contra = agents.contradictionCheck(client, a);
+    a.contradictions = contra;
+    if (contra.severe.length) {
+      contradictionsFound++;
+      a.status = 'escalated';
+      escalated++;
+      const c = contra.severe[0];
+      escalate(client, 'quality',
+        `"${a.title}" contradicts existing content: ${c.subject} claimed as ${c.a.value}% in ${c.a.label} vs ${c.b.value}% in ${c.b.label}. Update or remove one.`,
+        a.id);
+      continue;
+    }
+    if (contra.advisory.length) {
+      audit(client, 'quality', 'INFO',
+        `"${a.title}": ${contra.advisory.length} minor fact variance(s) vs existing content recorded (advisory).`);
+    }
+    if (client.reviewMode === 'client_review') {
+      a.status = 'pending_client_review';
+      gated++;
+    } else {
+      a.status = 'approved';
+      approved++;
+    }
+  }
+
+  const summary = `${drafts.length} drafts scored (threshold ${qualityMin}): ` +
+    `${approved} approved, ${gated} sent to client review, ${escalated} escalated` +
+    (retries ? `, ${retries} rewrites in the retry loop` : '') +
+    (contradictionsFound ? `, ${contradictionsFound} blocked by the contradiction check` : '') +
+    '. Contradiction check ran against the live corpus.' +
+    (regulated ? ` Compliance check ran on every draft (regulated industry: ${client.profile.industry}).` : '');
+  const status = escalated ? 'ESCALATE_TO_HUMAN' : (gated ? 'NEEDS_REVIEW' : 'PASS');
+  return { agent: 'quality', status, summary };
+}
+
+function runSingleStage(store, client, stage) {
+  // Brand profile gate (SPEC §10.1): no content work before the profile is
+  // approved. Legacy clients without a profile are treated as approved.
+  if (stage === 'research' && client.profile && client.profile.status !== 'approved') {
+    const out = {
+      agent: 'research', status: 'FAIL',
+      summary: `Blocked: brand profile v${client.profile.version} is ${client.profile.status.replace(/_/g, ' ')}. ` +
+        'Approve the brand profile before any content work.'
+    };
+    audit(client, out.agent, out.status, out.summary);
+    return out;
+  }
+  let out;
+  switch (stage) {
+    case 'baseline': out = agents.baseline(client); break;
+    case 'research': out = agents.research(client); break;
+    case 'brief': out = agents.brief(client); break;
+    case 'writer': out = agents.writer(client); break;
+    case 'quality': out = runQuality(client); break;
+    case 'publish': out = agents.publish(client); break;
+    case 'monitor': out = agents.monitor(client); break;
+    case 'optimize': out = agents.optimize(client); break;
+    default: {
+      const err = new Error(`Unknown stage: ${stage}`);
+      err.status = 400;
+      throw err;
+    }
+  }
+  audit(client, out.agent, out.status, out.summary);
+  // agents report escalations declaratively; the orchestrator owns the queue
+  const escs = out.escalations || (out.escalation ? [out.escalation] : []);
+  for (const e of escs) escalate(client, out.agent, e.reason, e.articleId);
+  return out;
+}
+
+// Full pipeline: Research → Brief → Writer → Quality → Publish, halting at
+// any human gate. When the symmetry gate holds articles back, one bounded
+// second Writer → Quality → Publish pass gets them live. Monitor/Optimize
+// run on their own (weekly) cadence.
+function runFull(store, client) {
+  if (client.profile && client.profile.status !== 'approved') {
+    const r = runSingleStage(store, client, 'research'); // audits the block
+    return { agent: 'pipeline', status: 'NEEDS_REVIEW', summary: `Halted at brand profile gate — ${r.summary}` };
+  }
+  if (!client.plan || client.plan.status === 'rejected' || client.pendingGaps.length) {
+    const r = runSingleStage(store, client, 'research');
+    return { agent: 'pipeline', status: 'NEEDS_REVIEW', summary: `Halted at plan gate — ${r.summary}` };
+  }
+  if (client.plan.status === 'pending_approval') {
+    return { agent: 'pipeline', status: 'NEEDS_REVIEW', summary: 'Halted at plan gate — content plan pending specialist approval.' };
+  }
+  if (!client.briefs.length) runSingleStage(store, client, 'brief');
+
+  for (let pass = 1; pass <= 2; pass++) {
+    runSingleStage(store, client, 'writer');
+    if (client.articles.some(a => a.status === 'draft')) {
+      const q = runSingleStage(store, client, 'quality');
+      if (q.status === 'ESCALATE_TO_HUMAN') {
+        return { agent: 'pipeline', status: 'ESCALATE_TO_HUMAN', summary: `Halted — ${q.summary}` };
+      }
+      if (q.status === 'NEEDS_REVIEW') {
+        return { agent: 'pipeline', status: 'NEEDS_REVIEW', summary: `Halted at client review gate — ${q.summary}` };
+      }
+    }
+    if (!client.articles.some(a => a.status === 'approved')) {
+      return { agent: 'pipeline', status: 'NEEDS_REVIEW', summary: 'Halted — no approved articles to publish (check reviews/escalations).' };
+    }
+    const p = runSingleStage(store, client, 'publish');
+    if (p.status === 'ESCALATE_TO_HUMAN' || p.status === 'FAIL') {
+      return { agent: 'pipeline', status: p.status, summary: `Halted at publish — ${p.summary}` };
+    }
+    // symmetry holds → drafts with feedback exist → one more pass fixes them
+    const heldDrafts = client.articles.some(a => a.status === 'draft' && a.feedback &&
+      (a.feedback.failed || []).includes('symmetryGate'));
+    if (!heldDrafts) break;
+  }
+  return { agent: 'pipeline', status: 'PASS', summary: `Full pipeline complete: ${client.articles.filter(a => a.status === 'published').length} articles live (hidden until traffic threshold).` };
+}
+
+function runStage(store, clientId, stage) {
+  const client = store.getClient(clientId);
+  if (!client) { const e = new Error('Client not found'); e.status = 404; throw e; }
+  if (!STAGES.includes(stage)) { const e = new Error(`Unknown stage: ${stage}`); e.status = 400; throw e; }
+  const out = stage === 'full' ? runFull(store, client) : runSingleStage(store, client, stage);
+  store.save();
+  return out;
+}
+
+// ---- Human decisions ---------------------------------------------------------
+
+// Brand profile gate decision (SPEC §10.1). 'revise' re-drafts (version+1,
+// note recorded) and stays pending; 'approve' unblocks Research.
+function profileDecision(store, clientId, decision, note) {
+  const client = store.getClient(clientId);
+  if (!client || !client.profile) { const e = new Error('No brand profile to review'); e.status = 404; throw e; }
+  if (!['approve', 'revise'].includes(decision)) { const e = new Error('decision must be approve|revise'); e.status = 400; throw e; }
+  if (decision === 'approve') {
+    client.profile.status = 'approved';
+    client.profile.approvedAt = now();
+    audit(client, 'human', 'INFO', `Specialist approved brand profile v${client.profile.version}` +
+      `${client.profile.regulated ? ` (regulated industry: ${client.profile.industry})` : ''}. Content work unblocked.`);
+  } else {
+    client.profile.version += 1;
+    client.profile.revisionNote = note || null;
+    client.profile.status = 'pending_approval';
+    client.profile.draftedAt = now();
+    audit(client, 'human', 'INFO', `Specialist requested brand profile revision → v${client.profile.version}${note ? ` — ${note}` : ''}. Still pending approval.`);
+  }
+  store.save();
+  return client.profile;
+}
+
+// Prompt-set gate decision (SPEC §10.2). Approval makes the set the weekly
+// tracking basis AND client-visible (read-only) via the plugin API; a
+// rejected set is regenerated by the next Research run.
+function promptSetDecision(store, clientId, decision) {
+  const client = store.getClient(clientId);
+  if (!client || !client.promptSet) { const e = new Error('No prompt set to review'); e.status = 404; throw e; }
+  if (!['approve', 'reject'].includes(decision)) { const e = new Error('decision must be approve|reject'); e.status = 400; throw e; }
+  client.promptSet.status = decision === 'approve' ? 'approved' : 'rejected';
+  if (decision === 'approve') client.promptSet.approvedAt = now();
+  audit(client, 'human', 'INFO', decision === 'approve'
+    ? `Specialist approved prompt set v${client.promptSet.version} (${client.promptSet.total} prompts). ` +
+      'Now the weekly tracking basis and visible read-only to the client.'
+    : `Specialist rejected prompt set v${client.promptSet.version} — the next Research run regenerates it.`);
+  store.save();
+  return client.promptSet;
+}
+
+function planDecision(store, clientId, decision, note) {
+  const client = store.getClient(clientId);
+  if (!client || !client.plan) { const e = new Error('No plan to review'); e.status = 404; throw e; }
+  if (!['approve', 'reject'].includes(decision)) { const e = new Error('decision must be approve|reject'); e.status = 400; throw e; }
+  client.plan.status = decision === 'approve' ? 'approved' : 'rejected';
+  client.plan.decisionNote = note || null;
+  audit(client, 'human', 'INFO', `Specialist ${decision}d content plan v${client.plan.version}${note ? ` — ${note}` : ''}.`);
+  store.save();
+  return client.plan;
+}
+
+function articleDecision(store, clientId, articleId, decision) {
+  const client = store.getClient(clientId);
+  const article = client && client.articles.find(a => a.id === articleId);
+  if (!article) { const e = new Error('Article not found'); e.status = 404; throw e; }
+  const map = { approve: 'approved', reject: 'rejected', revision: 'draft' };
+  if (!map[decision]) { const e = new Error('decision must be approve|reject|revision'); e.status = 400; throw e; }
+  article.status = map[decision];
+  if (decision === 'revision') article.feedback = { source: 'client', failed: [], note: 'client requested revision' };
+  audit(client, 'human', 'INFO', `Client review: "${article.title}" → ${decision}.`);
+  store.save();
+  return article;
+}
+
+// Hidden-post lifecycle (July update §2.1): after the traffic-threshold
+// notification, the client decides whether the post enters site navigation.
+function visibilityDecision(store, clientId, articleId, decision, actor) {
+  const client = store.getClient(clientId);
+  const article = client && client.articles.find(a => a.id === articleId);
+  if (!article) { const e = new Error('Article not found'); e.status = 404; throw e; }
+  if (!['make_visible', 'keep_hidden'].includes(decision)) {
+    const e = new Error('decision must be make_visible|keep_hidden'); e.status = 400; throw e;
+  }
+  if (decision === 'make_visible') {
+    article.visibility = 'visible';
+    const post = client.wp.posts.find(p => p.slug === article.slug);
+    if (post) post.inNavigation = true;
+  }
+  const notif = client.notifications.find(n => n.articleId === articleId && n.status === 'pending');
+  if (notif) {
+    notif.status = 'decided';
+    notif.decision = decision;
+    notif.decidedAt = now();
+  }
+  audit(client, actor || 'client', 'INFO',
+    `Visibility decision for "${article.title}": ${decision === 'make_visible' ? 'now publicly visible (in navigation)' : 'kept hidden (sitemap-only)'}.`);
+  store.save();
+  return article;
+}
+
+// Webhook from the WordPress plugin confirming a post is live.
+function publishConfirmation(store, clientId, articleId) {
+  const client = store.getClient(clientId);
+  const article = client && client.articles.find(a => a.id === articleId);
+  if (!article) { const e = new Error('Article not found'); e.status = 404; throw e; }
+  article.webhookStatus = 'confirmed';
+  const esc = client.escalations.find(e =>
+    e.status === 'open' && e.articleId === articleId && /webhook/i.test(e.reason));
+  if (esc) { esc.status = 'resolved'; esc.resolution = 'webhook_received'; esc.resolvedAt = now(); }
+  audit(client, 'plugin', 'INFO', `Publish confirmation received for "${article.title}".`);
+  store.save();
+  return article;
+}
+
+function reportDecision(store, clientId, reportId, decision) {
+  const client = store.getClient(clientId);
+  const report = client && client.reports.find(r => r.id === reportId);
+  if (!report) { const e = new Error('Report not found'); e.status = 404; throw e; }
+  if (decision !== 'approve') { const e = new Error('decision must be approve'); e.status = 400; throw e; }
+  report.status = 'approved';
+  audit(client, 'human', 'INFO', `Specialist approved performance report #${report.week}. Optimization unlocked.`);
+  store.save();
+  return report;
+}
+
+function resolveEscalation(store, clientId, escalationId, action) {
+  const client = store.getClient(clientId);
+  const esc = client && client.escalations.find(e => e.id === escalationId);
+  if (!esc) { const e = new Error('Escalation not found'); e.status = 404; throw e; }
+  const actions = ['force_approve', 'rewrite', 'dismiss'];
+  if (!actions.includes(action)) { const e = new Error(`action must be ${actions.join('|')}`); e.status = 400; throw e; }
+  const article = esc.articleId ? client.articles.find(a => a.id === esc.articleId) : null;
+  if (article) {
+    if (action === 'force_approve') article.status = article.publishedUrl ? article.status : 'approved';
+    if (action === 'rewrite') { article.status = 'draft'; article.feedback = { source: 'human', failed: [], note: 'human requested rewrite' }; }
+    if (action === 'dismiss' && !article.publishedUrl) article.status = 'rejected';
+  }
+  esc.status = 'resolved';
+  esc.resolution = action;
+  esc.resolvedAt = now();
+  audit(client, 'human', 'INFO', `Escalation resolved (${action}): ${esc.reason}`);
+  store.save();
+  return esc;
+}
+
+function updateSettings(store, clientId, input) {
+  const client = store.getClient(clientId);
+  if (!client) { const e = new Error('Client not found'); e.status = 404; throw e; }
+  if (input.thresholds) client.thresholds = { ...client.thresholds, ...input.thresholds };
+  if (input.reviewMode) client.reviewMode = input.reviewMode === 'client_review' ? 'client_review' : 'auto';
+  if (Array.isArray(input.keywords) && input.keywords.length) {
+    client.keywords = [...new Set([...client.keywords, ...input.keywords])];
+  }
+  if (Array.isArray(input.competitors) && input.competitors.length) {
+    client.competitors = [...new Set([...client.competitors, ...input.competitors])];
+  }
+  if (input.brandVoice) client.brandVoice = input.brandVoice;
+  if (typeof input.simulateRobotsBlock === 'boolean') client.simulateRobotsBlock = input.simulateRobotsBlock;
+  if (typeof input.simulateWebhookFailure === 'boolean') client.simulateWebhookFailure = input.simulateWebhookFailure;
+  audit(client, 'system', 'INFO', 'Settings updated.');
+  store.save();
+  return client;
+}
+
+module.exports = {
+  STAGES, DEFAULT_THRESHOLDS, createClient, runStage,
+  profileDecision, promptSetDecision,
+  planDecision, articleDecision, visibilityDecision, publishConfirmation,
+  reportDecision, resolveEscalation, updateSettings
+};
+
+});
+
+__define('report', function (module, exports, require) {
+'use strict';
+// Weekly web report (SPEC §10.4): standalone shareable HTML — token-gated,
+// printable to PDF, and anonymisable for sales calls (demo mode swaps the
+// client identity while every metric stays real). Structure is Ole's;
+// all client-facing prose is placeholder copy that Sami owns.
+const ENGINES = ['chatgpt', 'gemini', 'perplexity', 'google_ai_overview'];
+const ENGINE_LABEL = { chatgpt: 'ChatGPT', gemini: 'Gemini', perplexity: 'Perplexity', google_ai_overview: 'Google AI Overview' };
+
+function esc(s) { return String(s ?? '').replace(/[&<>"]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m])); }
+function pct(x) { return `${(x * 100).toFixed(0)}%`; }
+
+// Demo mode: swap the client identity, keep the data. Competitor domains are
+// mapped to stable letters so tables stay readable.
+function identityFor(client, demo) {
+  if (!demo) {
+    return {
+      name: client.name,
+      domain: client.domain,
+      competitor: (v) => v.replace('competitor:', '')
+    };
+  }
+  const industry = client.profile && client.profile.industry ? client.profile.industry : client.niche;
+  const compMap = new Map();
+  return {
+    name: `Anonymised client (${industry})`,
+    domain: '(domain withheld)',
+    competitor: (v) => {
+      const key = v.replace('competitor:', '');
+      if (!compMap.has(key)) compMap.set(key, `Competitor ${String.fromCharCode(65 + compMap.size)}`);
+      return compMap.get(key);
+    }
+  };
+}
+
+function ownerCell(v, id) {
+  if (v === null) return '<td class="nobody">nobody</td>';
+  if (v === 'client') return '<td class="yes">this client</td>';
+  return `<td class="no">${esc(id.competitor(v))}</td>`;
+}
+
+function statTile(label, value, sub) {
+  return `<div class="tile"><div class="tile-label">${esc(label)}</div>` +
+    `<div class="tile-value">${esc(value)}</div>` +
+    (sub ? `<div class="tile-sub">${esc(sub)}</div>` : '') + '</div>';
+}
+
+function renderReport(client, report, opts = {}) {
+  const demo = !!opts.demo;
+  const id = identityFor(client, demo);
+  const pt = report.promptTracking || null;
+  const lang = client.profile && client.profile.primaryLanguage === 'nl' ? 'nl' : 'en';
+
+  const tiles = pt ? [
+    statTile('Mention rate (this week)', pct(pt.weekly.mentionRate),
+      `brand named in the answer · ${pt.promptCount} prompts × ${ENGINES.length} engines × ${pt.runsPerPrompt} runs`),
+    statTile('Citation rate (this week)', pct(pt.weekly.citationRate),
+      'site used as a source — the metric that matters'),
+    statTile(`Rolling ${pt.rolling.weeks.length}-week average`, pct(pt.rolling.citationRate),
+      `citation rate, weeks ${pt.rolling.weeks.join(' · ')}`),
+    statTile('Baseline → now', `${pct(pt.baseline.citationRate)} → ${pct(pt.rolling.citationRate)}`,
+      'citation rate before the engagement vs the rolling average')
+  ].join('') : '';
+
+  const intentRows = pt ? pt.byIntent.map(g =>
+    `<tr><td>${esc(g.intent)}</td><td>${g.prompts}</td><td>${pct(g.mentionRate)}</td><td>${pct(g.citationRate)}</td></tr>`).join('') : '';
+
+  const topPrompts = pt ? [...pt.results]
+    .map(r => ({ ...r, avgCite: ENGINES.reduce((s, e) => s + r.engines[e].citationRate, 0) / ENGINES.length }))
+    .sort((a, b) => b.avgCite - a.avgCite)
+    .slice(0, 10) : [];
+  const promptRows = topPrompts.map(r =>
+    `<tr><td>${esc(r.prompt)}</td><td class="dim">${esc(r.intent)}</td>${ENGINES.map(e =>
+      `<td>${pct(r.engines[e].citationRate)}</td>`).join('')}</tr>`).join('');
+
+  const queryRows = (report.queryCitations || []).slice(0, 8).map(row =>
+    `<tr><td>${esc(row.query)}</td>${ENGINES.map(e => ownerCell(row.engines[e], id)).join('')}</tr>`).join('');
+
+  const kwRows = (report.keywords || []).slice(0, 8).map(k =>
+    `<tr><td>${esc(k.keyword)}</td><td>${k.impressions}</td><td>${k.clicks}</td><td>${k.position}</td></tr>`).join('');
+
+  return `<!doctype html><html lang="${lang}"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>AI visibility report #${report.week} — ${esc(id.name)}</title>
+<style>
+:root { --ink:#1c2430; --dim:#68758a; --line:#dde3ec; --accent:#0f6f5c; --warn:#a15c07; --bg:#f6f8fb; }
+* { box-sizing: border-box; }
+body { font: 15px/1.55 -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); background: var(--bg); margin: 0; }
+.page { max-width: 880px; margin: 0 auto; padding: 32px 24px 64px; }
+header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; border-bottom: 2px solid var(--ink); padding-bottom: 16px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+h2 { font-size: 16px; margin: 32px 0 8px; }
+.dim { color: var(--dim); }
+.small { font-size: 12.5px; }
+.brandmark { font-weight: 700; letter-spacing: .12em; }
+.demo-flag { display: inline-block; background: #fff3e0; color: var(--warn); border: 1px solid var(--warn); border-radius: 4px; padding: 2px 8px; font-size: 12px; font-weight: 600; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-top: 20px; }
+.tile { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
+.tile-label { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); }
+.tile-value { font-size: 26px; font-weight: 700; color: var(--accent); margin: 4px 0 2px; }
+.tile-sub { font-size: 12px; color: var(--dim); }
+table { border-collapse: collapse; width: 100%; background: #fff; border: 1px solid var(--line); font-size: 13.5px; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+th { background: #eef2f7; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+td.yes { color: var(--accent); font-weight: 600; }
+td.no { color: #9a3b3b; }
+td.nobody { color: var(--dim); font-style: italic; }
+.note { background: #fff; border-left: 3px solid var(--accent); padding: 10px 14px; margin: 16px 0; font-size: 13.5px; }
+.placeholder { background: #fbf6e9; border: 1px dashed #cdb87a; padding: 10px 14px; font-size: 13px; color: #6b5d2e; margin: 16px 0; }
+.printbtn { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 8px 16px; font-size: 14px; cursor: pointer; }
+@media print {
+  body { background: #fff; }
+  .printbtn { display: none; }
+  .page { padding: 0; max-width: none; }
+  .tile-value { color: #000; }
+}
+</style></head><body><div class="page">
+<header>
+  <div>
+    <div class="brandmark">AUREVA</div>
+    <h1>AI search visibility — weekly report #${report.week}</h1>
+    <p class="dim" style="margin:0">${esc(id.name)} · ${esc(id.domain)} · ${esc(report.createdAt.slice(0, 10))}
+    ${demo ? ' · <span class="demo-flag">ANONYMISED DEMO — real metrics, identity withheld</span>' : ''}</p>
+  </div>
+  <button class="printbtn" onclick="window.print()">Print / save as PDF</button>
+</header>
+
+<div class="placeholder">[Placeholder intro copy — final client-facing prose is owned and written by Aureva.
+This section will summarise the week in one paragraph for the client.]</div>
+
+${pt ? `
+<div class="tiles">${tiles}</div>
+
+<div class="note"><strong>How to read this:</strong> every prompt is checked ${pt.runsPerPrompt} times per engine
+each week because AI answers vary run to run. <strong>Mention rate</strong> counts the brand being named;
+<strong>citation rate</strong> counts the site being used as a source. Weekly numbers swing — 40–60% monthly
+citation volatility (drift) is normal in AI search — so trend decisions are made on the
+<strong>${pt.rolling.weeks.length}-week rolling average</strong>, never on a single week.</div>
+
+<h2>Visibility by prompt intent</h2>
+<table><tr><th>Intent</th><th>Prompts</th><th>Mention rate</th><th>Citation rate</th></tr>${intentRows}</table>
+
+<h2>Top prompts by citation rate</h2>
+<table><tr><th>Prompt</th><th>Intent</th>${ENGINES.map(e => `<th>${ENGINE_LABEL[e]}</th>`).join('')}</tr>${promptRows}</table>
+<p class="dim small">Showing 10 of ${pt.promptCount} tracked prompts (approved prompt set, shown to the client at onboarding).</p>
+` : `
+<div class="note">Prompt tracking starts once the prompt set is approved. This report covers search
+performance and per-article citations only.</div>
+`}
+
+<h2>Who does each engine cite on the core queries?</h2>
+<table><tr><th>Query</th>${ENGINES.map(e => `<th>${ENGINE_LABEL[e]}</th>`).join('')}</tr>${queryRows}</table>
+<p class="dim small">“nobody” = citation whitespace — the cheapest wins; these queries are fed straight back into the content plan.</p>
+
+<h2>Search performance (Google Search Console)</h2>
+<table><tr><th>Keyword</th><th>Impressions</th><th>Clicks</th><th>Position</th></tr>${kwRows}</table>
+
+<h2>Traffic (GA4)</h2>
+<p class="dim">Organic sessions: ${report.ga4.organicSessions} · Engagement rate: ${report.ga4.engagementRate} · Conversions: ${report.ga4.conversions}</p>
+
+<div class="placeholder">[Placeholder closing copy — next steps and recommendations, written by Aureva.]</div>
+<p class="dim small">Generated by the Aureva pipeline · report #${report.week} · baseline recorded before engagement start.</p>
+</div></body></html>`;
+}
+
+module.exports = { renderReport };
+
+});
+
+/* Demo shim: in-browser store + fetch interception. The operator console UI
+ * (app.js) runs verbatim; every /api/... call is routed to the real
+ * orchestrator in-memory instead of a server. State persists to localStorage. */
+
+const __orch = __require('orchestrator');
+const __mock = __require('mock');
+const __report = __require('report');
+const __DEMO_KEY = 'aureva-demo-db';
+
+const __store = {
+  db: (() => {
+    try { return JSON.parse(localStorage.getItem(__DEMO_KEY)) || { clients: [] }; }
+    catch { return { clients: [] }; }
+  })(),
+  save() { try { localStorage.setItem(__DEMO_KEY, JSON.stringify(this.db)); } catch { /* quota */ } },
+  clients() { return this.db.clients; },
+  getClient(id) { return this.db.clients.find(c => c.id === id) || null; },
+  getClientByApiKey(key) { return key ? this.db.clients.find(c => c.apiKey === key) || null : null; },
+  addClient(c) { this.db.clients.push(c); this.save(); }
+};
+
+function demoReset() {
+  localStorage.removeItem(__DEMO_KEY);
+  location.reload();
+}
+
+// ---- router mirroring src/server.js ----------------------------------------
+
+function __esc(s) { return String(s).replace(/[&<>"]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m])); }
+
+function __postPage(client, post) {
+  const links = (post.internalLinks || []).length
+    ? '<h2>Related reading</h2>' + post.internalLinks.map(l =>
+        `<p>${__esc(l.context || '')} <em>${__esc(String(l.target).replace(/-/g, ' '))}</em></p>`).join('\n') : '';
+  return __postPageInner(client, post, links);
+}
+function __postPageInner(client, post, links) {
+  const schema = post.schema.map(s =>
+    `<script type="application/ld+json">${JSON.stringify({ '@context': 'https://schema.org', ...s })}<\/script>`).join('\n');
+  const body = post.body.map(s => `<h2>${__esc(s.heading)}</h2><p>${__esc(s.content)}</p>`).join('\n');
+  const faq = post.faq.length
+    ? '<h2>FAQ</h2>' + post.faq.map(f => `<h3>${__esc(f.q)}</h3><p>${__esc(f.a)}</p>`).join('\n') : '';
+  return `<!doctype html><html><head><title>${__esc(post.metaTitle)}</title>
+<meta name="description" content="${__esc(post.metaDescription)}">
+<link rel="canonical" href="${__esc(post.canonical)}">
+${schema}
+<style>body{font-family:Georgia,serif;max-width:720px;margin:2rem auto;padding:0 1rem;color:#222}h1{font-size:1.6rem}</style>
+</head><body><p><em>Mock WordPress site for ${__esc(client.name)} — v${post.version} · ${post.inNavigation ? 'in site navigation' : 'hidden post (sitemap-only discovery)'}</em></p>
+<h1>${__esc(post.title)}</h1>${body}${links}${faq}</body></html>`;
+}
+
+function __route(method, url, body) {
+  const [pathname, qs] = url.split('?');
+  const query = new URLSearchParams(qs || '');
+  const m = (re) => pathname.match(re);
+  let x;
+  try {
+    if (pathname === '/api/clients' && method === 'GET') return { status: 200, body: __store.clients() };
+    if (pathname === '/api/clients' && method === 'POST') return { status: 201, body: __orch.createClient(__store, body) };
+    if ((x = m(/^\/api\/clients\/([^/]+)\/profile\/decision$/)) && method === 'POST') {
+      return { status: 200, body: __orch.profileDecision(__store, x[1], body.decision, body.note) };
+    }
+    if ((x = m(/^\/api\/clients\/([^/]+)\/promptset\/decision$/)) && method === 'POST') {
+      return { status: 200, body: __orch.promptSetDecision(__store, x[1], body.decision) };
+    }
+    if ((x = m(/^\/report\/([^/]+)\/([^/]+)$/)) && method === 'GET') {
+      const c = __store.getClient(x[1]);
+      if (!c) return { status: 404, body: 'Report not found', type: 'text/plain' };
+      if (!c.reportToken || query.get('token') !== c.reportToken) {
+        return { status: 403, body: 'Invalid or missing report token', type: 'text/plain' };
+      }
+      const r = c.reports.find(rep => rep.id === x[2]);
+      if (!r) return { status: 404, body: 'Report not found', type: 'text/plain' };
+      return { status: 200, body: __report.renderReport(c, r, { demo: query.get('demo') === '1' }), type: 'text/html' };
+    }
+    if ((x = m(/^\/api\/clients\/([^/]+)$/)) && method === 'GET') {
+      const c = __store.getClient(x[1]);
+      return c ? { status: 200, body: c } : { status: 404, body: { error: 'Client not found' } };
+    }
+    if ((x = m(/^\/api\/clients\/([^/]+)\/settings$/)) && method === 'PUT') {
+      return { status: 200, body: __orch.updateSettings(__store, x[1], body) };
+    }
+    if ((x = m(/^\/api\/clients\/([^/]+)\/run\/([^/]+)$/)) && method === 'POST') {
+      return { status: 200, body: __orch.runStage(__store, x[1], x[2]) };
+    }
+    if ((x = m(/^\/api\/clients\/([^/]+)\/plan\/decision$/)) && method === 'POST') {
+      return { status: 200, body: __orch.planDecision(__store, x[1], body.decision, body.note) };
+    }
+    if ((x = m(/^\/api\/clients\/([^/]+)\/articles\/([^/]+)\/decision$/)) && method === 'POST') {
+      return { status: 200, body: __orch.articleDecision(__store, x[1], x[2], body.decision) };
+    }
+    if ((x = m(/^\/api\/clients\/([^/]+)\/articles\/([^/]+)\/visibility$/)) && method === 'POST') {
+      return { status: 200, body: __orch.visibilityDecision(__store, x[1], x[2], body.decision, 'operator') };
+    }
+    if ((x = m(/^\/api\/clients\/([^/]+)\/reports\/([^/]+)\/decision$/)) && method === 'POST') {
+      return { status: 200, body: __orch.reportDecision(__store, x[1], x[2], body.decision) };
+    }
+    if ((x = m(/^\/api\/clients\/([^/]+)\/escalations\/([^/]+)\/resolve$/)) && method === 'POST') {
+      return { status: 200, body: __orch.resolveEscalation(__store, x[1], x[2], body.action) };
+    }
+    if ((x = m(/^\/mock-wp\/([^/]+)\/llms\.txt$/))) {
+      const c = __store.getClient(x[1]);
+      return { status: 200, body: (c && c.wp.llmsTxt) || '# (no pages published yet)\n', type: 'text/plain' };
+    }
+    if ((x = m(/^\/mock-wp\/([^/]+)\/robots\.txt$/))) {
+      const c = __store.getClient(x[1]);
+      return { status: 200, body: c ? __mock.robotsTxt(c) : 'not found', type: 'text/plain' };
+    }
+    if ((x = m(/^\/mock-wp\/([^/]+)\/sitemap\.xml$/))) {
+      const c = __store.getClient(x[1]);
+      return { status: 200, body: c ? __mock.renderSitemap(c) : 'not found', type: 'text/plain' };
+    }
+    if ((x = m(/^\/mock-wp\/([^/]+)\/posts\/([^/]+)$/))) {
+      const c = __store.getClient(x[1]);
+      const post = c && c.wp.posts.find(p => p.slug === x[2]);
+      return post ? { status: 200, body: __postPage(c, post), type: 'text/html' }
+        : { status: 404, body: 'not found', type: 'text/plain' };
+    }
+    return { status: 404, body: { error: 'Not found (demo router)' } };
+  } catch (err) {
+    return { status: err.status || 500, body: { error: err.message } };
+  }
+}
+
+const __realFetch = window.fetch.bind(window);
+window.fetch = function (input, init = {}) {
+  const url = typeof input === 'string' ? input : input.url;
+  const rel = url.startsWith('/') ? url : new URL(url, location.href).pathname + new URL(url, location.href).search;
+  const pathname = rel.split('?')[0];
+  if (!pathname.startsWith('/api/') && !pathname.startsWith('/mock-wp/') && !pathname.startsWith('/report/')) {
+    return __realFetch(input, init);
+  }
+  const body = init.body ? JSON.parse(init.body) : {};
+  const r = __route((init.method || 'GET').toUpperCase(), rel, body);
+  const isJson = !r.type;
+  const text = isJson ? JSON.stringify(r.body) : r.body;
+  return Promise.resolve({
+    ok: r.status < 400, status: r.status, statusText: '',
+    json: async () => (isJson ? r.body : JSON.parse(text)),
+    text: async () => text
+  });
+};
+
+// mock-WP links and web-report links open as generated blob pages. When
+// window.open is blocked (embedded webviews, aggressive popup blockers —
+// exactly the environments a sales demo can end up in) the page opens in a
+// full-screen in-page viewer instead, so the flow never dead-ends.
+function __openGenerated(href) {
+  const r = __route('GET', href, {});
+  const blob = new Blob([r.body], { type: r.type || 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const win = window.open(url, '_blank');
+  if (win) return;
+  let v = document.getElementById('demo-viewer');
+  if (!v) {
+    v = document.createElement('div');
+    v.id = 'demo-viewer';
+    v.style.cssText = 'position:fixed;inset:0;z-index:100;background:#0e1116;display:flex;flex-direction:column';
+    v.innerHTML =
+      '<div style="display:flex;align-items:center;gap:12px;padding:8px 14px;border-bottom:1px solid #2a3341">' +
+      '<span id="demo-viewer-path" class="mono" style="color:#8b96a5;font-size:12px;flex:1"></span>' +
+      '<button data-testid="viewer-close" onclick="document.getElementById(\'demo-viewer\').remove()">✕ Close</button></div>' +
+      '<iframe data-testid="viewer-frame" style="flex:1;border:0;background:#fff"></iframe>';
+    document.body.appendChild(v);
+  }
+  v.querySelector('iframe').src = url;
+  v.querySelector('#demo-viewer-path').textContent = href;
+}
+
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('a[href^="/mock-wp/"], a[href^="/report/"]');
+  if (!a) return;
+  e.preventDefault();
+  __openGenerated(a.getAttribute('href'));
+});
+
+// ---- seed: a populated agency so the first impression is a working system ---
+
+function __seed() {
+  if (__store.clients().length) return;
+  try {
+    const c1 = __orch.createClient(__store, {
+      name: 'Meridian Legal', domain: 'meridianlegal.example',
+      niche: 'employment law for startups',
+      keywords: ['startup employment contracts', 'equity compensation law'],
+      competitors: ['https://competitorlaw.example', 'https://biglaw.example'],
+      brandVoice: 'authoritative but plain-spoken', reviewMode: 'auto'
+    });
+    __orch.runStage(__store, c1.id, 'research');
+    __orch.planDecision(__store, c1.id, 'approve', 'demo seed');
+    ['brief', 'writer', 'quality', 'publish'].forEach(s => __orch.runStage(__store, c1.id, s));
+    __orch.runStage(__store, c1.id, 'monitor');
+    __orch.reportDecision(__store, c1.id, __store.getClient(c1.id).reports[0].id, 'approve');
+    __orch.runStage(__store, c1.id, 'monitor');
+    __orch.reportDecision(__store, c1.id, __store.getClient(c1.id).reports[1].id, 'approve');
+    __orch.runStage(__store, c1.id, 'optimize');
+    __orch.runStage(__store, c1.id, 'research'); // plan v2 consumes the fed-back gap
+
+    const c2 = __orch.createClient(__store, {
+      name: 'Nordwind SaaS', domain: 'nordwind.example', niche: 'EV charging software',
+      keywords: ['smart EV charging', 'load balancing chargers'],
+      competitors: ['https://chargerival.example'],
+      brandVoice: 'technical, energetic', reviewMode: 'client_review'
+    });
+    __orch.runStage(__store, c2.id, 'research');
+    __orch.planDecision(__store, c2.id, 'approve', 'demo seed');
+    ['brief', 'writer', 'quality'].forEach(s => __orch.runStage(__store, c2.id, s));
+
+    // v1.2 demo persona: Dutch regulated dental practice, driven end to end so
+    // the anonymised weekly web report exists on first load (July 23 call).
+    const c3 = __orch.createClient(__store, {
+      name: 'Tandartspraktijk Elzenhof', domain: 'elzenhof-tandartsen.example',
+      niche: 'tandheelkunde',
+      keywords: ['tandarts amsterdam', 'onzichtbare beugel'],
+      competitors: ['https://tandzorgrivaal.example', 'https://dentclinic.example'],
+      brandVoice: 'warm, deskundig, geruststellend', reviewMode: 'auto',
+      companyDescription: 'Moderne tandartspraktijk in Amsterdam-Zuid met focus op angstvrije tandheelkunde en onzichtbare beugels.',
+      toneOfVoice: 'geruststellend en professioneel, geen jargon',
+      brandRules: ['nooit medische claims zonder bron', 'geen superlatieven over behandelresultaten'],
+      languages: ['nl', 'en'], primaryLanguage: 'nl',
+      audiences: ['angstige patiënten', 'ouders met kinderen', 'volwassenen die een beugel overwegen'],
+      regulated: true, industry: 'dental care'
+    });
+    __orch.profileDecision(__store, c3.id, 'approve');
+    __orch.runStage(__store, c3.id, 'research');
+    __orch.planDecision(__store, c3.id, 'approve', 'demo seed');
+    __orch.promptSetDecision(__store, c3.id, 'approve');
+    __orch.runStage(__store, c3.id, 'full');
+    for (let w = 0; w < 2; w++) {
+      __orch.runStage(__store, c3.id, 'monitor');
+      const cl = __store.getClient(c3.id);
+      __orch.reportDecision(__store, c3.id, cl.reports[cl.reports.length - 1].id, 'approve');
+    }
+  } catch (err) {
+    console.error('demo seed failed:', err);
+  }
+}
+__seed();
+
+</script>
+<script>
+'use strict';
+/* Aureva operator console — vanilla JS, no build step. */
+
+const state = { clients: [], selId: null, tab: 'pipeline', view: 'client' };
+const $ = (s) => document.querySelector(s);
+const ENGINES = ['chatgpt', 'gemini', 'perplexity', 'google_ai_overview'];
+const ENGINE_LABEL = { chatgpt: 'ChatGPT', gemini: 'Gemini', perplexity: 'Perplexity', google_ai_overview: 'Google AI Overview' };
+
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m])); }
+function badge(v) { return `<span class="badge b-${esc(v)}" data-testid="badge-${esc(v)}">${esc(String(v).replace(/_/g, ' '))}</span>`; }
+
+async function api(method, path, body) {
+  const res = await fetch(path, {
+    method,
+    headers: { 'content-type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || res.statusText);
+  return json;
+}
+
+function toast(msg, status) {
+  const t = $('#toast');
+  t.innerHTML = (status ? badge(status) + ' ' : '') + esc(msg);
+  t.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.remove('show'), 6000);
+}
+
+function sel() { return state.clients.find(c => c.id === state.selId) || null; }
+
+async function refresh() {
+  state.clients = await api('GET', '/api/clients');
+  if (!state.selId && state.clients.length) state.selId = state.clients[0].id;
+  render();
+}
+
+// ---------- actions ----------
+
+async function act(fn, okMsg) {
+  closeModal(); // decisions may be taken from inside a modal; never leave a stale overlay up
+  try {
+    const out = await fn();
+    if (out && out.summary) toast(out.summary, out.status);
+    else if (okMsg) toast(okMsg);
+    await refresh();
+  } catch (e) {
+    toast(e.message, 'FAIL');
+    await refresh();
+  }
+}
+
+window.runStage = (stage) => act(() => api('POST', `/api/clients/${state.selId}/run/${stage}`));
+window.planDecide = (d) => act(() => api('POST', `/api/clients/${state.selId}/plan/decision`, { decision: d }), `Plan ${d}d`);
+window.articleDecide = (aid, d) => act(() => api('POST', `/api/clients/${state.selId}/articles/${aid}/decision`, { decision: d }), `Article ${d}`);
+window.visibilityDecide = (aid, d) => act(() => api('POST', `/api/clients/${state.selId}/articles/${aid}/visibility`, { decision: d }),
+  d === 'make_visible' ? 'Post is now publicly visible (in navigation)' : 'Post kept hidden (sitemap-only)');
+window.reportDecide = (rid) => act(() => api('POST', `/api/clients/${state.selId}/reports/${rid}/decision`, { decision: 'approve' }), 'Report approved — optimization unlocked');
+window.resolveEsc = (eid, action) => act(() => api('POST', `/api/clients/${state.selId}/escalations/${eid}/resolve`, { action }), `Escalation resolved: ${action}`);
+window.selectClient = (id) => { state.selId = id; state.view = 'client'; state.tab = 'pipeline'; render(); };
+window.setTab = (t) => { state.tab = t; render(); };
+window.showOnboard = () => { state.view = 'onboard'; render(); };
+window.closeModal = () => $('#modal-wrap').classList.remove('show');
+
+window.profileDecide = (d) => {
+  const note = d === 'revise' ? ($('#revise-note') ? $('#revise-note').value : '') : undefined;
+  return act(() => api('POST', `/api/clients/${state.selId}/profile/decision`, { decision: d, note }),
+    d === 'approve' ? 'Brand profile approved — content work unblocked' : 'Revision requested — profile re-drafted, still pending');
+};
+window.promptSetDecide = (d) => act(() => api('POST', `/api/clients/${state.selId}/promptset/decision`, { decision: d }),
+  d === 'approve' ? 'Prompt set approved — weekly tracking basis, client-visible (read-only)' : 'Prompt set rejected — next Research run regenerates it');
+
+window.submitOnboard = async (ev) => {
+  ev.preventDefault();
+  const f = ev.target;
+  const split = (v) => v.split(',').map(s => s.trim()).filter(Boolean);
+  const primary = f.primaryLanguage.value;
+  try {
+    const client = await api('POST', '/api/clients', {
+      name: f.name.value, domain: f.domain.value, niche: f.niche.value,
+      keywords: split(f.keywords.value), competitors: split(f.competitors.value),
+      brandVoice: f.brandVoice.value, reviewMode: f.reviewMode.value,
+      // deep intake (v1.2) — a company description opens the brand profile gate
+      companyDescription: f.companyDescription.value.trim(),
+      toneOfVoice: f.toneOfVoice.value.trim(),
+      brandRules: split(f.brandRules.value),
+      audiences: split(f.audiences.value),
+      primaryLanguage: primary,
+      languages: f.bilingual.checked ? ['nl', 'en'] : [primary],
+      regulated: f.regulated.checked,
+      industry: f.industry.value.trim(),
+      liveCrawl: f.liveCrawl.checked
+    });
+    const gated = client.profile && client.profile.status === 'pending_approval';
+    state.selId = client.id; state.view = 'client'; state.tab = gated ? 'profile' : 'baseline';
+    toast(gated
+      ? `Client "${client.name}" onboarded — brand profile drafted and PENDING APPROVAL. Content is blocked until you approve it.`
+      : `Client "${client.name}" onboarded — baseline audit recorded. Plugin API key: ${client.apiKey}`);
+    await refresh();
+  } catch (e) { toast(e.message, 'FAIL'); }
+  return false;
+};
+
+window.saveSettings = async (ev) => {
+  ev.preventDefault();
+  const f = ev.target;
+  await act(() => api('PUT', `/api/clients/${state.selId}/settings`, {
+    thresholds: {
+      qualityMin: +f.qualityMin.value,
+      maxWriterAttempts: +f.maxWriterAttempts.value,
+      dropSensitivity: +f.dropSensitivity.value,
+      visitorThreshold: +f.visitorThreshold.value,
+      visitorWindowDays: +f.visitorWindowDays.value
+    },
+    reviewMode: f.reviewMode.value,
+    simulateRobotsBlock: f.simulateRobotsBlock.checked,
+    simulateWebhookFailure: f.simulateWebhookFailure.checked
+  }), 'Settings saved');
+  return false;
+};
+
+window.viewArticle = (aid) => {
+  const a = sel().articles.find(x => x.id === aid);
+  if (!a) return;
+  const links = (a.internalLinks || []).map(l => typeof l === 'object' ? l : { target: l, context: '', sameCluster: false });
+  const symmetryOk = a.schemaHeadline === a.title;
+  $('#modal').innerHTML = `
+    <h1>${esc(a.title)}</h1>
+    <p class="dim">${badge(a.status)} ${a.publishedUrl ? badge(a.visibility || 'hidden') : ''} score ${a.score ?? '—'} · attempt ${a.attempt} · v${a.version} · ${a.wordCount} words</p>
+    <h2>Direct answer (citation snippet)</h2><p>${esc(a.directAnswer)}</p>
+    <h2>Score breakdown (Signal Clarity rubric v2)</h2>
+    ${a.scoreBreakdown ? `<pre data-testid="score-breakdown">${esc(JSON.stringify(a.scoreBreakdown, null, 2))}</pre>` : '<p class="dim">Not scored yet.</p>'}
+    <h2>Symmetry (DOM ↔ JSON-LD)</h2>
+    <p class="dim" data-testid="symmetry-state">${symmetryOk
+      ? '✓ JSON-LD headline matches the H1.'
+      : `⚠ JSON-LD headline "${esc(a.schemaHeadline)}" ≠ H1 "${esc(a.title)}" — the publish symmetry gate will hold this.`}</p>
+    <h2>Semantic relationship links (${links.length})</h2>
+    ${links.map(l => `<p class="dim" data-testid="semantic-link">→ <span class="mono">${esc(l.target)}</span>${l.sameCluster ? ' <span class="badge b-low">same cluster</span>' : ''}<br>${l.context ? esc(l.context) : '<em>⚠ no conceptual bridge — bare link</em>'}</p>`).join('')}
+    <h2>Structure</h2>
+    <p class="dim">Headings: ${a.sections.map(s => esc(s.heading)).join(' · ')}</p>
+    <p class="dim">Entities (${a.entities.length}): ${a.entities.map(esc).join(', ')}</p>
+    <p class="dim">Facts (${a.facts.length}): e.g. “${esc(a.facts[0].claim)}” — ${esc(a.facts[0].source)}, ${a.facts[0].year}</p>
+    <p class="dim">FAQ: ${a.faq.length} questions · Schema: ${a.faq.length ? '' : '(no FAQPage) '}${a.schemaTypes.map(esc).join(', ')}</p>
+    <p class="dim">Unique Information Delta: ${esc(a.angle)}</p>
+    ${a.contradictions && (a.contradictions.severe.length + a.contradictions.advisory.length) ? `
+      <h2>Contradiction check</h2>
+      ${a.contradictions.severe.map(c => `<p data-testid="contradiction-severe">⛔ ${esc(c.subject)}: ${c.a.value}% (${esc(c.a.label)}) vs ${c.b.value}% (${esc(c.b.label)})</p>`).join('')}
+      ${a.contradictions.advisory.map(c => `<p class="dim">△ minor variance on ${esc(c.subject)}: ${c.a.value}% vs ${c.b.value}%</p>`).join('')}` : ''}
+    ${a.publishedUrl ? `
+      <h2>Publication</h2>
+      <p class="dim" data-testid="pub-state">Webhook: ${esc(a.webhookStatus || '—')} · Verification: ${a.verification ? (a.verification.ok ? '✓ 200 + static HTML confirmed' : '⚠ failed: ' + Object.entries(a.verification.checks).filter(([, v]) => !v).map(([k]) => k).join(', ')) : '—'} · Visibility: ${esc(a.visibility)}</p>
+      <p><a href="${esc(a.publishedUrl)}" target="_blank" style="color:var(--accent2)">View live page →</a></p>` : ''}
+    <p style="margin-top:14px"><button onclick="closeModal()" data-testid="modal-close">Close</button></p>`;
+  $('#modal-wrap').classList.add('show');
+};
+
+function ownerCell(v) {
+  if (v === null) return '<td class="cite-nobody" data-testid="cite-nobody">◌ nobody</td>';
+  if (v === 'client') return '<td class="cite-yes">● client</td>';
+  return `<td class="cite-no">${esc(v.replace('competitor:', ''))}</td>`;
+}
+
+window.viewReport = (rid) => {
+  const r = sel().reports.find(x => x.id === rid);
+  if (!r) return;
+  const pt = r.promptTracking;
+  $('#modal').innerHTML = `
+    <h1>Performance report #${r.week}</h1>
+    <p class="dim">${badge(r.status)} · ${esc(r.createdAt)}
+      ${sel().reportToken ? ` · <a href="/report/${sel().id}/${r.id}?token=${esc(sel().reportToken)}" target="_blank" data-testid="report-web-link" style="color:var(--accent2)">Web report ↗</a>
+      · <a href="/report/${sel().id}/${r.id}?token=${esc(sel().reportToken)}&demo=1" target="_blank" data-testid="report-demo-link" style="color:var(--accent2)">Anonymised demo ↗</a>` : ''}</p>
+    ${pt ? `
+    <h2>Prompt tracking — volatility-aware (${pt.promptCount} prompts × 4 engines × ${pt.runsPerPrompt} runs)</h2>
+    <p data-testid="prompt-tracking-summary">
+      Mention rate <strong>${Math.round(pt.weekly.mentionRate * 100)}%</strong> ·
+      Citation rate <strong>${Math.round(pt.weekly.citationRate * 100)}%</strong> ·
+      Rolling ${pt.rolling.weeks.length}-week avg citation <strong>${Math.round(pt.rolling.citationRate * 100)}%</strong> ·
+      Baseline anchor ${Math.round(pt.baseline.citationRate * 100)}% → ${Math.round(pt.rolling.citationRate * 100)}%
+    </p>
+    <p class="dim">Weekly numbers swing (40–60% monthly drift is normal) — decisions run on the rolling average, never a single week.</p>
+    <table data-testid="intent-breakdown"><tr><th>Intent</th><th>Prompts</th><th>Mention rate</th><th>Citation rate</th></tr>
+    ${pt.byIntent.map(g => `<tr><td>${esc(g.intent)}</td><td>${g.prompts}</td><td>${Math.round(g.mentionRate * 100)}%</td><td>${Math.round(g.citationRate * 100)}%</td></tr>`).join('')}
+    </table>` : ''}
+    <h2>Keywords (Search Console)</h2>
+    <table><tr><th>Keyword</th><th>Impressions</th><th>Clicks</th><th>Position</th></tr>
+    ${r.keywords.slice(0, 8).map(k => `<tr><td>${esc(k.keyword)}</td><td>${k.impressions}</td><td>${k.clicks}</td><td>${k.position}</td></tr>`).join('')}
+    </table>
+    <h2>Citations per engine (our articles)</h2>
+    <table data-testid="citation-matrix"><tr><th>Article</th>${ENGINES.map(e => `<th>${ENGINE_LABEL[e]}</th>`).join('')}</tr>
+    ${r.citations.map(row => `<tr><td>${esc(row.slug)}</td>${ENGINES.map(e =>
+      `<td class="${row.engines[e] ? 'cite-yes' : 'cite-no'}">${row.engines[e] ? '● cited' : '○ not cited'}</td>`).join('')}</tr>`).join('')}
+    </table>
+    <h2>Query ownership — who does each engine cite? (◌ nobody = whitespace)</h2>
+    <table data-testid="query-ownership"><tr><th>Query</th>${ENGINES.map(e => `<th>${ENGINE_LABEL[e]}</th>`).join('')}</tr>
+    ${(r.queryCitations || []).slice(0, 8).map(row => `<tr><td>${esc(row.query)}</td>${ENGINES.map(e => ownerCell(row.engines[e])).join('')}</tr>`).join('')}
+    </table>
+    <h2>Citation whitespace (${(r.whitespace || []).length}) — cheapest wins, fed back to Research</h2>
+    ${(r.whitespace || []).length ? (r.whitespace || []).map(w => `<p data-testid="whitespace-query">◌ “${esc(w.query)}” — 2+ engines cite nobody</p>`).join('') : '<p class="dim">None this week.</p>'}
+    <h2>Hidden-post traffic (threshold ${sel().thresholds.visitorThreshold} visitors / ${sel().thresholds.visitorWindowDays} days)</h2>
+    <table data-testid="visitors-table"><tr><th>Article</th><th>Visitors</th></tr>
+    ${(r.visitors || []).map(v => `<tr><td>${esc(v.slug)}</td><td>${v.visitors}</td></tr>`).join('')}
+    </table>
+    <h2>Traffic (GA4)</h2>
+    <p class="dim">Organic sessions: ${r.ga4.organicSessions} · Engagement: ${r.ga4.engagementRate} · Conversions: ${r.ga4.conversions}</p>
+    <h2>AI bot crawls</h2>
+    <p class="dim">${r.botVisits.map(b => `${esc(b.bot)}: ${b.visits}`).join(' · ')}</p>
+    <h2>Dropped pages (${r.droppedPages.length})</h2>
+    ${r.droppedPages.length ? r.droppedPages.map(d => `<p data-testid="dropped-page">⚠ ${esc(d.slug)} — ${esc(d.reason)}</p>`).join('') : '<p class="dim">None.</p>'}
+    <h2>New content gaps (${r.newGaps.length})</h2>
+    ${r.newGaps.map(g => `<p class="dim">“${esc(g.query)}” — ${g.impressions} impressions, no ranking page</p>`).join('')}
+    ${r.status === 'pending_review' ? `<p style="margin-top:12px"><button class="primary" data-testid="report-approve" onclick="reportDecide('${r.id}')">Approve report</button></p>` : ''}
+    <p style="margin-top:14px"><button onclick="closeModal()" data-testid="modal-close">Close</button></p>`;
+  $('#modal-wrap').classList.add('show');
+};
+
+// ---------- rendering ----------
+
+function render() {
+  $('#client-list').innerHTML = state.clients.map(c =>
+    `<a href="#" class="${c.id === state.selId && state.view === 'client' ? 'sel' : ''}" data-testid="client-link-${esc(c.name)}"
+       onclick="selectClient('${c.id}');return false">${esc(c.name)}<small>${esc(c.domain)}</small></a>`).join('')
+    || '<p class="dim" style="padding:8px">No clients yet.</p>';
+
+  if (state.view === 'onboard' || !state.clients.length) return renderOnboard();
+  const c = sel();
+  if (!c) return;
+
+  const tabs = ['pipeline', 'profile', 'baseline', 'plan', 'content', 'publishing', 'monitoring', 'escalations', 'audit', 'settings'];
+  const openEsc = c.escalations.filter(e => e.status === 'open').length;
+  const pendingNotif = c.notifications ? c.notifications.filter(n => n.status === 'pending').length : 0;
+  const profilePending = (c.profile && c.profile.status === 'pending_approval' ? 1 : 0) +
+    (c.promptSet && c.promptSet.status === 'pending_approval' ? 1 : 0);
+  const label = {
+    escalations: `escalations${openEsc ? ` (${openEsc})` : ''}`,
+    publishing: `publishing${pendingNotif ? ` (${pendingNotif})` : ''}`,
+    profile: `profile${profilePending ? ` (${profilePending})` : ''}`
+  };
+  $('#content').innerHTML = `
+    <h1 data-testid="client-name">${esc(c.name)}</h1>
+    <p class="dim">${esc(c.domain)} · ${esc(c.niche)} · ${c.reviewMode === 'client_review' ? 'client review mode' : 'auto-publish mode'}</p>
+    <div class="tabs">${tabs.map(t =>
+      `<button class="${state.tab === t ? 'sel' : ''}" data-testid="tab-${t}" onclick="setTab('${t}')">${label[t] || t}</button>`).join('')}</div>
+    <div id="tab-body">${renderTab(c)}</div>`;
+}
+
+function renderOnboard() {
+  $('#content').innerHTML = `
+    <h1>Onboard a new client</h1>
+    <p class="dim">Step 1 of the pipeline — a baseline audit runs automatically and a brand profile is drafted
+    from the intake + a site crawl. With a deep intake, the profile must be approved before ANY content work starts.</p>
+    <form class="panel" onsubmit="return submitOnboard(event)" style="margin-top:14px">
+      <label>Client name</label><input name="name" data-testid="ob-name" required>
+      <label>Domain</label><input name="domain" data-testid="ob-domain" placeholder="client.example" required>
+      <label>Niche</label><input name="niche" data-testid="ob-niche" placeholder="e.g. employment law for startups" required>
+      <label>Seed keywords (comma-separated)</label><input name="keywords" data-testid="ob-keywords" required>
+      <label>Competitor URLs (comma-separated)</label><input name="competitors" data-testid="ob-competitors" required>
+      <div class="check">
+        <input type="checkbox" id="ob-livecrawl" name="liveCrawl" data-testid="ob-livecrawl">
+        <label for="ob-livecrawl" style="margin:0">LIVE-crawl the real site at onboarding — baseline audits the actual pages, robots.txt and llms.txt (server mode only; takes ~10s)</label>
+      </div>
+      <label>Brand voice</label><input name="brandVoice" data-testid="ob-voice" placeholder="authoritative but plain-spoken">
+      <h2>Deep intake — brand profile (fill this in for the full onboarding gate)</h2>
+      <label>Company description (in the client's words)</label>
+      <textarea name="companyDescription" data-testid="ob-description" rows="3" placeholder="What the company does, for whom, and what makes it different"></textarea>
+      <label>Tone of voice</label><input name="toneOfVoice" data-testid="ob-tone" placeholder="e.g. geruststellend en professioneel, geen jargon">
+      <label>Brand rules (comma-separated do/don'ts)</label><input name="brandRules" data-testid="ob-rules" placeholder="e.g. nooit medische claims zonder bron">
+      <label>Target audiences (comma-separated)</label><input name="audiences" data-testid="ob-audiences" placeholder="e.g. angstige patiënten, ouders met kinderen">
+      <label>Primary content language</label>
+      <select name="primaryLanguage" data-testid="ob-language">
+        <option value="en">English</option>
+        <option value="nl">Nederlands (Dutch)</option>
+      </select>
+      <div class="check">
+        <input type="checkbox" id="ob-bilingual" name="bilingual" data-testid="ob-bilingual">
+        <label for="ob-bilingual" style="margin:0">Bilingual NL + EN</label>
+      </div>
+      <div class="check">
+        <input type="checkbox" id="ob-regulated" name="regulated" data-testid="ob-regulated">
+        <label for="ob-regulated" style="margin:0">Regulated industry (adds a mandatory compliance check to the quality gate)</label>
+      </div>
+      <label>Industry (labels the compliance check)</label><input name="industry" data-testid="ob-industry" placeholder="e.g. dental care">
+      <label>Content approval mode</label>
+      <select name="reviewMode" data-testid="ob-reviewmode">
+        <option value="auto">Auto-publish after quality gate</option>
+        <option value="client_review">Client reviews drafts before publishing</option>
+      </select>
+      <p style="margin-top:14px"><button class="primary" type="submit" data-testid="ob-submit">Onboard client</button></p>
+    </form>`;
+}
+
+function renderTab(c) {
+  return {
+    pipeline: renderPipeline, profile: renderProfile, baseline: renderBaseline, plan: renderPlan, content: renderContent,
+    publishing: renderPublishing, monitoring: renderMonitoring,
+    escalations: renderEscalations, audit: renderAudit, settings: renderSettings
+  }[state.tab](c);
+}
+
+// Brand profile + prompt set (v1.2, SPEC §10.1–10.2)
+function renderProfile(c) {
+  const p = c.profile;
+  if (!p) return '<div class="empty" data-testid="profile-empty">Legacy client — no brand profile (treated as approved).</div>';
+  const ps = c.promptSet;
+  return `
+    <div class="row">
+      <h2 style="margin:0">Brand profile v${p.version}</h2>
+      ${badge(p.status)}
+      ${p.regulated ? '<span class="badge b-high" data-testid="profile-regulated">⚕ regulated: ' + esc(p.industry) + '</span>' : ''}
+    </div>
+    ${p.status === 'pending_approval' ? `
+      <p class="dim" data-testid="profile-gate-note">⛔ Gate active — Research and everything downstream is blocked until this profile is approved.</p>
+      <div class="row" style="margin-bottom:10px">
+        <button class="primary" data-testid="profile-approve" onclick="profileDecide('approve')">Approve profile</button>
+        <input id="revise-note" data-testid="profile-revise-note" placeholder="revision note (optional)" style="max-width:280px">
+        <button data-testid="profile-revise" onclick="profileDecide('revise')">Request revision</button>
+      </div>` : `<p class="dim">${p.autoApproved ? 'Auto-approved (minimal intake).' : 'Approved — content work unblocked.'}</p>`}
+    <div class="card" style="margin-bottom:10px" data-testid="profile-card">
+      <p><strong>Company:</strong> ${esc(p.companyDescription)}</p>
+      <p><strong>Tone of voice:</strong> ${esc(p.toneOfVoice)}</p>
+      <p><strong>Brand rules:</strong> ${p.brandRules.length ? p.brandRules.map(esc).join(' · ') : '<span class="dim">none provided</span>'}</p>
+      <p><strong>Languages:</strong> ${p.languages.map(esc).join(' + ')} (writer produces <strong>${esc(p.primaryLanguage)}</strong>)</p>
+      <p><strong>Audiences:</strong> ${p.audiences.length ? p.audiences.map(esc).join(' · ') : '<span class="dim">none provided</span>'}</p>
+      ${p.revisionNote ? `<p><strong>Last revision note:</strong> ${esc(p.revisionNote)}</p>` : ''}
+      <p class="dim">Site-crawl signals: ${p.crawlSignals.pagesCrawled} pages · detected tone “${esc(p.crawlSignals.detectedTone)}” ·
+        topics ${p.crawlSignals.detectedTopics.map(esc).join(', ')} · existing blog: ${p.crawlSignals.hasExistingBlog ? 'yes' : 'no'}</p>
+    </div>
+    <div class="row">
+      <h2 style="margin:0">Prompt set${ps ? ` v${ps.version}` : ''}</h2>
+      ${ps ? badge(ps.status) : ''}
+      ${ps && ps.status === 'pending_approval' ? `
+        <button class="primary" data-testid="promptset-approve" onclick="promptSetDecide('approve')">Approve prompt set</button>
+        <button class="danger" data-testid="promptset-reject" onclick="promptSetDecide('reject')">Reject</button>` : ''}
+    </div>
+    ${!ps ? '<p class="dim" data-testid="promptset-empty">Generated by the Research agent from this profile — run Research (after approving the profile).</p>' : `
+      <p class="dim" data-testid="promptset-meta">${ps.total} prompts · ${ps.groups.length} intent groups · from ${esc(ps.generatedFrom)}.
+        ${ps.status === 'approved' ? 'Weekly tracking basis; shown READ-ONLY to the client during onboarding (clients catch missing product lines).'
+          : ps.status === 'rejected' ? 'Rejected — the next Research run regenerates it.'
+          : 'Specialist approval required before any tracking starts.'}</p>
+      ${ps.groups.map(g => `
+        <div class="card" style="margin-bottom:8px" data-testid="promptgroup-${esc(g.intent)}">
+          <h3>${esc(g.intent)} (${g.prompts.length})</h3>
+          ${g.prompts.slice(0, 4).map(x => `<p class="dim">“${esc(x.text)}” <span class="mono">${esc(x.language)}</span></p>`).join('')}
+          ${g.prompts.length > 4 ? `<p class="dim">… ${g.prompts.length - 4} more</p>` : ''}
+        </div>`).join('')}`}`;
+}
+
+function count(c, status) { return c.articles.filter(a => a.status === status).length; }
+
+function renderPipeline(c) {
+  const last = (agent) => {
+    const e = [...c.audit].reverse().find(x => x.agent === agent);
+    return e ? `${badge(e.status)}<p>${esc(e.summary)}</p>` : '<p class="dim">Not run yet.</p><p></p>';
+  };
+  const stages = [
+    ['baseline', '0 · Baseline', 'Pre-engagement audit: existing pages, citations, whitespace, robots'],
+    ['research', '1 · Research', 'Keyword discovery, topical map, content gaps → monthly plan'],
+    ['brief', '2 · Brief', 'Per-article briefs: keywords, headings, links, schema, angle'],
+    ['writer', '3 · Writer', 'Signal-Clarity drafts with semantic relationship links'],
+    ['quality', '4 · Quality', `Rubric v2 vs threshold ${c.thresholds.qualityMin}; retry loop; contradiction gate`],
+    ['publish', '5 · Publish', 'Crawl check, symmetry gate, hidden WP post, sitemap + llms.txt, pings'],
+    ['monitor', '6 · Monitor', 'Weekly citations, whitespace, drops, traffic thresholds, new gaps'],
+    ['optimize', '7 · Optimize', 'Fix flagged pages, republish, feed gaps + whitespace to Research']
+  ];
+  return `
+    <div class="row" style="margin-bottom:14px">
+      <button class="primary" data-testid="run-full" onclick="runStage('full')">▶ Run full pipeline</button>
+      <span class="dim">Runs Research → Publish, halting at human gates; symmetry holds trigger one bounded second pass.</span>
+    </div>
+    <div class="cards">
+      ${stages.map(([id, name, desc]) => `
+        <div class="card" data-testid="stage-${id}">
+          <h3>${name}</h3>
+          <p>${desc}</p>
+          <div data-testid="stage-${id}-last">${last(id)}</div>
+          <button data-testid="run-${id}" onclick="runStage('${id}')" style="margin-top:8px">Run</button>
+        </div>`).join('')}
+    </div>
+    <h2>State</h2>
+    <p class="dim" data-testid="state-summary">
+      Brand profile: ${c.profile ? `v${c.profile.version} ${c.profile.status}` : 'legacy (treated approved)'} ·
+      Prompt set: ${c.promptSet ? `v${c.promptSet.version} ${c.promptSet.status} (${c.promptSet.total})` : 'none'} ·
+      Plan: ${c.plan ? `v${c.plan.version} ${c.plan.status}` : 'none'} ·
+      Briefs: ${c.briefs.length} ·
+      Drafts: ${count(c, 'draft')} · Pending client review: ${count(c, 'pending_client_review')} ·
+      Approved: ${count(c, 'approved')} · Published: ${count(c, 'published')} ·
+      Hidden: ${c.articles.filter(a => a.publishedUrl && a.visibility === 'hidden').length} ·
+      Visible: ${c.articles.filter(a => a.publishedUrl && a.visibility === 'visible').length} ·
+      Flagged: ${count(c, 'flagged')} · Escalated: ${count(c, 'escalated')} ·
+      Open escalations: ${c.escalations.filter(e => e.status === 'open').length} ·
+      Pending visibility decisions: ${c.notifications ? c.notifications.filter(n => n.status === 'pending').length : 0} ·
+      Gaps queued: ${c.pendingGaps.length}
+    </p>`;
+}
+
+function renderBaseline(c) {
+  const b = c.baseline;
+  if (!b) return '<div class="empty" data-testid="baseline-empty">No baseline audit yet — run stage 0.</div>';
+  const s = b.summary;
+  return `
+    <div class="row">
+      <h2 style="margin:0">Baseline audit — the “before” picture</h2>
+      ${b.live ? '<span class="badge b-PASS" data-testid="baseline-live">● LIVE crawl</span>' : '<span class="badge b-medium">mock crawl</span>'}
+      <span class="dim">${esc(b.createdAt.slice(0, 10))}</span>
+      <button data-testid="rerun-baseline" onclick="runStage('baseline')">${b.live ? 'Re-crawl + re-run' : 'Re-run'}</button>
+    </div>
+    <p class="dim" data-testid="baseline-summary">Avg citability ${s.avgCitability}/100 · ${s.jsRenderedPages} JS-rendered · ${s.orphanPages} orphaned ·
+      ${s.pagesWithoutSchema} without schema · ${s.contradictionsFound} contradictions · ${s.whitespaceQueries} whitespace queries ·
+      robots.txt ${b.robots.ok ? '✓ all AI crawlers allowed' : '⚠ BLOCKS ' + b.robots.blocked.join(', ')}
+      ${b.live && b.llmsTxt ? ` · llms.txt ${b.llmsTxt.present ? '✓ present' : `⚠ MISSING (HTTP ${b.llmsTxt.status})`}` : ''}</p>
+    ${b.live ? `<p class="dim" data-testid="baseline-live-note">Pages, robots.txt and llms.txt above are fetched from the real site.
+      Per-engine citation ownership below is still <strong>simulated</strong> until the AI-engine citation adapters are connected.
+      ${(b.crawlErrors || []).length ? `⚠ Crawl notes: ${b.crawlErrors.map(esc).join(' · ')}` : ''}</p>` : ''}
+    <h2>Existing pages</h2>
+    <table data-testid="baseline-pages">
+      <tr><th>Page</th><th>Citability</th><th>Words</th><th>Schema</th><th>Flags</th></tr>
+      ${b.pages.map(p => `<tr>
+        <td>${esc(p.title)}<br><span class="dim mono">${esc(p.url)}</span></td>
+        <td>${p.citability}/100</td><td>${p.wordCount}</td>
+        <td>${p.hasSchema ? '✓' : '—'}</td>
+        <td class="dim">${[p.jsRendered ? '⚠ JS-rendered' : '', p.orphan ? '⚠ orphan' : ''].filter(Boolean).join(' · ') || '—'}</td>
+      </tr>`).join('')}
+    </table>
+    <h2>Contradictions in existing content (${b.contradictions.length})</h2>
+    ${b.contradictions.length ? b.contradictions.map(x => `
+      <p data-testid="baseline-contradiction">⛔ <span class="mono">${esc(x.subject)}</span>: ${x.a.value}% on ${esc(x.a.label)} vs ${x.b.value}% on ${esc(x.b.label)} ${x.severe ? badge('high') : badge('medium')}</p>`).join('')
+      : '<p class="dim">None found.</p>'}
+    <h2>Query baseline — who is cited today? (◌ nobody = whitespace)</h2>
+    <table data-testid="baseline-queries"><tr><th>Query</th>${ENGINES.map(e => `<th>${ENGINE_LABEL[e]}</th>`).join('')}</tr>
+    ${b.queries.map(row => `<tr><td>${esc(row.query)}</td>${ENGINES.map(e => ownerCell(row.engines[e])).join('')}</tr>`).join('')}
+    </table>
+    ${b.whitespace.length ? `<p class="dim" data-testid="baseline-whitespace">Whitespace queries (nobody cited on 2+ engines): ${b.whitespace.map(esc).join(' · ')}</p>` : ''}`;
+}
+
+function renderPlan(c) {
+  if (!c.plan) return '<div class="empty" data-testid="plan-empty">No content plan yet — run the Research agent.</div>';
+  const p = c.plan;
+  return `
+    <div class="row">
+      <h2 style="margin:0">Content plan v${p.version}</h2>
+      ${badge(p.status)}
+      ${p.status === 'pending_approval' ? `
+        <button class="primary" data-testid="plan-approve" onclick="planDecide('approve')">Approve plan</button>
+        <button class="danger" data-testid="plan-reject" onclick="planDecide('reject')">Reject</button>` : ''}
+    </div>
+    <p class="dim">${p.keywords.length} keywords · ${p.clusters.length} clusters · ${p.gapKeywordsConsumed} gap keywords fed back from Monitor</p>
+    ${(p.contradictions || []).length ? `
+      <h2>Corpus contradictions flagged (${p.contradictions.length})</h2>
+      ${p.contradictions.slice(0, 5).map(x => `<p class="dim" data-testid="plan-contradiction">⛔ ${esc(x.subject)}: ${x.a.value}% (${esc(x.a.label)}) vs ${x.b.value}% (${esc(x.b.label)}) — update or remove one</p>`).join('')}` : ''}
+    <h2>Prioritized articles (long-tail first)</h2>
+    <table data-testid="plan-table">
+      <tr><th>#</th><th>Keyword</th><th>Competition</th><th>Volume</th><th>Intent</th><th>Source</th></tr>
+      ${p.prioritizedArticles.map((k, i) =>
+        `<tr><td>${i + 1}</td><td>${esc(k.keyword)}</td><td>${badge(k.competition)}</td><td>${k.volume}</td><td>${esc(k.intent)}</td><td>${k.source === 'citation_whitespace' ? '<span class="badge b-low">◌ whitespace</span>' : esc(k.source)}</td></tr>`).join('')}
+    </table>
+    <h2>Topical map (hub &amp; spoke)</h2>
+    ${p.clusters.map(cl => `
+      <div class="card" style="margin-bottom:8px">
+        <h3>Pillar: ${esc(cl.pillar)}</h3>
+        <p class="dim">Spokes: ${cl.spokes.map(esc).join(' · ') || '—'}</p>
+      </div>`).join('')}`;
+}
+
+function renderContent(c) {
+  if (!c.articles.length && !c.briefs.length) return '<div class="empty">No briefs or drafts yet — approve a plan, then run Brief and Writer.</div>';
+  return `
+    <p class="dim">${c.briefs.length} briefs · ${c.articles.length} articles</p>
+    <table data-testid="articles-table">
+      <tr><th>Article</th><th>Keyword</th><th>Status</th><th>Visibility</th><th>Score</th><th>Attempt</th><th>v</th><th></th></tr>
+      ${c.articles.map(a => `
+        <tr data-testid="article-row-${esc(a.slug)}">
+          <td>${esc(a.title)}</td>
+          <td class="dim">${esc(a.keyword)}</td>
+          <td>${badge(a.status)}${a.feedback && (a.feedback.failed || []).includes('symmetryGate') ? ' <span class="dim">⚠ symmetry</span>' : ''}</td>
+          <td>${a.publishedUrl ? badge(a.visibility || 'hidden') : '<span class="dim">—</span>'}</td>
+          <td>${a.score ?? '—'}</td>
+          <td>${a.attempt}</td>
+          <td>${a.version}</td>
+          <td class="row">
+            <button data-testid="article-view-${esc(a.slug)}" onclick="viewArticle('${a.id}')">View</button>
+            ${a.status === 'pending_client_review' ? `
+              <button class="primary" data-testid="article-approve-${esc(a.slug)}" onclick="articleDecide('${a.id}','approve')">Approve</button>
+              <button data-testid="article-revision-${esc(a.slug)}" onclick="articleDecide('${a.id}','revision')">Revise</button>
+              <button class="danger" data-testid="article-reject-${esc(a.slug)}" onclick="articleDecide('${a.id}','reject')">Reject</button>` : ''}
+          </td>
+        </tr>`).join('')}
+    </table>`;
+}
+
+function renderPublishing(c) {
+  const pending = (c.notifications || []).filter(n => n.status === 'pending');
+  const decided = (c.notifications || []).filter(n => n.status !== 'pending');
+  if (!c.wp.posts.length) return '<div class="empty" data-testid="publishing-empty">Nothing published yet.</div>';
+  return `
+    <p>
+      <a href="/mock-wp/${c.id}/sitemap.xml" target="_blank" data-testid="link-sitemap" style="color:var(--accent2)">sitemap.xml</a> ·
+      <a href="/mock-wp/${c.id}/llms.txt" target="_blank" data-testid="link-llms" style="color:var(--accent2)">llms.txt</a> ·
+      <a href="/mock-wp/${c.id}/robots.txt" target="_blank" data-testid="link-robots" style="color:var(--accent2)">robots.txt</a>
+    </p>
+    ${pending.length ? `
+      <h2>Traffic-threshold notifications — client decision needed (${pending.length})</h2>
+      ${pending.map(n => `
+        <div class="card" style="margin-bottom:8px" data-testid="notification-${esc(n.slug)}">
+          <h3>“${esc(n.title)}”</h3>
+          <p>${n.visitors} visitors in ${n.windowDays} days — above the threshold. Make it publicly visible?</p>
+          <div class="row">
+            <button class="primary" data-testid="notif-visible-${esc(n.slug)}" onclick="visibilityDecide('${n.articleId}','make_visible')">Make visible</button>
+            <button data-testid="notif-hidden-${esc(n.slug)}" onclick="visibilityDecide('${n.articleId}','keep_hidden')">Keep hidden</button>
+          </div>
+        </div>`).join('')}` : ''}
+    <table data-testid="posts-table">
+      <tr><th>Post</th><th>Cluster</th><th>Visibility</th><th>Webhook</th><th>Schema</th><th>v</th><th></th></tr>
+      ${c.wp.posts.map(p => {
+        const art = c.articles.find(a => a.slug === p.slug) || {};
+        return `
+        <tr><td>${esc(p.title)}${p.isPillar ? ' <span class="badge b-low">pillar</span>' : ''}</td>
+        <td class="dim">${esc(p.clusterTopic || '—')}</td>
+        <td data-testid="post-vis-${esc(p.slug)}">${p.inNavigation ? badge('visible') : badge('hidden')}</td>
+        <td class="dim">${esc(art.webhookStatus || '—')}</td>
+        <td class="dim">${p.schema.map(s => esc(s['@type'])).join(', ')}</td><td>${p.version}</td>
+        <td><a href="${esc(p.url)}" target="_blank" data-testid="post-link-${esc(p.slug)}" style="color:var(--accent2)">Open →</a></td></tr>`;
+      }).join('')}
+    </table>
+    ${decided.length ? `<p class="dim">Past visibility decisions: ${decided.map(n => `${esc(n.slug)} → ${esc(n.decision)}`).join(' · ')}</p>` : ''}
+    <h2>Indexing pings</h2>
+    <table data-testid="pings-table">
+      <tr><th>Service</th><th>URLs</th><th>When</th></tr>
+      ${c.wp.pings.map(p => `<tr><td>${esc(p.service)}</td><td class="dim">${p.urls.length}</td><td class="dim">${esc(p.ts)}</td></tr>`).join('')}
+    </table>`;
+}
+
+function renderMonitoring(c) {
+  return `
+    <div class="row" style="margin-bottom:10px">
+      <button class="primary" data-testid="run-monitor-tab" onclick="runStage('monitor')">Run weekly monitor</button>
+      <button data-testid="run-optimize-tab" onclick="runStage('optimize')">Run optimizer</button>
+    </div>
+    ${!c.reports.length ? '<div class="empty" data-testid="reports-empty">No reports yet.</div>' : `
+    <table data-testid="reports-table">
+      <tr><th>Report</th><th>Status</th><th>Citations</th><th>Whitespace</th><th>Dropped</th><th>Gaps</th><th></th></tr>
+      ${[...c.reports].reverse().map(r => {
+        const cited = r.citations.reduce((s, row) => s + Object.values(row.engines).filter(Boolean).length, 0);
+        return `<tr data-testid="report-row-${r.week}">
+          <td>#${r.week} <span class="dim">${esc(r.createdAt.slice(0, 10))}</span></td>
+          <td>${badge(r.status)}</td>
+          <td>${cited}/${r.citations.length * 4}</td>
+          <td>${(r.whitespace || []).length}</td>
+          <td>${r.droppedPages.length}</td>
+          <td>${r.newGaps.length}</td>
+          <td class="row">
+            <button data-testid="report-view-${r.week}" onclick="viewReport('${r.id}')">View</button>
+            ${c.reportToken ? `
+              <a href="/report/${c.id}/${r.id}?token=${esc(c.reportToken)}" target="_blank" data-testid="report-web-${r.week}" style="color:var(--accent2);align-self:center">Web ↗</a>
+              <a href="/report/${c.id}/${r.id}?token=${esc(c.reportToken)}&demo=1" target="_blank" data-testid="report-demo-${r.week}" style="color:var(--accent2);align-self:center">Demo ↗</a>` : ''}
+            ${r.status === 'pending_review' ? `<button class="primary" data-testid="report-approve-${r.week}" onclick="reportDecide('${r.id}')">Approve</button>` : ''}
+          </td></tr>`;
+      }).join('')}
+    </table>`}
+    ${c.optimizationLog.length ? `
+      <h2>Optimization log</h2>
+      ${c.optimizationLog.map(l => `<div class="card" style="margin-bottom:8px" data-testid="opt-log">
+        <p class="dim">${esc(l.ts)} — ${l.pages.length} pages updated, ${l.gapsFedBack} gaps + whitespace queries fed back to Research</p>
+        ${l.pages.map(pg => `<p class="dim">↻ ${esc(pg.slug)} → v${pg.version}: ${pg.actions.map(esc).join(', ')}</p>`).join('')}
+      </div>`).join('')}` : ''}`;
+}
+
+function renderEscalations(c) {
+  const items = [...c.escalations].reverse();
+  if (!items.length) return '<div class="empty" data-testid="escalations-empty">No escalations. Good.</div>';
+  return `
+    <table data-testid="escalations-table">
+      <tr><th>When</th><th>Source</th><th>Reason</th><th>Status</th><th></th></tr>
+      ${items.map(e => `
+        <tr data-testid="escalation-row-${e.id}">
+          <td class="dim">${esc(e.createdAt.slice(0, 19).replace('T', ' '))}</td>
+          <td>${esc(e.source)}</td>
+          <td>${esc(e.reason)}</td>
+          <td>${badge(e.status)}${e.resolution ? ` <span class="dim">${esc(e.resolution)}</span>` : ''}</td>
+          <td class="row">${e.status === 'open' ? `
+            ${e.articleId ? `
+              <button class="primary" data-testid="esc-approve-${e.id}" onclick="resolveEsc('${e.id}','force_approve')">Force approve</button>
+              <button data-testid="esc-rewrite-${e.id}" onclick="resolveEsc('${e.id}','rewrite')">Rewrite</button>` : ''}
+            <button class="danger" data-testid="esc-dismiss-${e.id}" onclick="resolveEsc('${e.id}','dismiss')">Dismiss</button>` : ''}
+          </td>
+        </tr>`).join('')}
+    </table>`;
+}
+
+function renderAudit(c) {
+  return `
+    <table data-testid="audit-table">
+      <tr><th>When</th><th>Agent</th><th>Status</th><th>Summary</th></tr>
+      ${[...c.audit].reverse().map(e => `
+        <tr><td class="dim mono">${esc(e.ts.slice(0, 19).replace('T', ' '))}</td>
+        <td>${esc(e.agent)}</td><td>${badge(e.status)}</td><td>${esc(e.summary)}</td></tr>`).join('')}
+    </table>`;
+}
+
+function renderSettings(c) {
+  return `
+    <form class="panel" onsubmit="return saveSettings(event)">
+      <h2 style="margin-top:0">Thresholds</h2>
+      <label>Quality minimum Signal Clarity score (0–100)</label>
+      <input type="number" name="qualityMin" data-testid="set-qualitymin" value="${c.thresholds.qualityMin}" min="0" max="101">
+      <label>Max writer attempts before escalation</label>
+      <input type="number" name="maxWriterAttempts" data-testid="set-maxattempts" value="${c.thresholds.maxWriterAttempts}" min="1" max="10">
+      <label>Ranking drop sensitivity (positions)</label>
+      <input type="number" name="dropSensitivity" data-testid="set-dropsensitivity" value="${c.thresholds.dropSensitivity}" min="1" max="50">
+      <label>Visitor threshold for visibility notification</label>
+      <input type="number" name="visitorThreshold" data-testid="set-visitorthreshold" value="${c.thresholds.visitorThreshold}" min="1" max="1000">
+      <label>Visitor window (days)</label>
+      <input type="number" name="visitorWindowDays" data-testid="set-visitorwindow" value="${c.thresholds.visitorWindowDays}" min="1" max="90">
+      <h2>Approval gates</h2>
+      <label>Content approval mode</label>
+      <select name="reviewMode" data-testid="set-reviewmode">
+        <option value="auto" ${c.reviewMode === 'auto' ? 'selected' : ''}>Auto-publish after quality gate</option>
+        <option value="client_review" ${c.reviewMode === 'client_review' ? 'selected' : ''}>Client reviews drafts before publishing</option>
+      </select>
+      <div class="check">
+        <input type="checkbox" id="robots" name="simulateRobotsBlock" data-testid="set-robotsblock" ${c.simulateRobotsBlock ? 'checked' : ''}>
+        <label for="robots" style="margin:0">Simulate robots.txt blocking AI crawlers (demo)</label>
+      </div>
+      <div class="check">
+        <input type="checkbox" id="webhookfail" name="simulateWebhookFailure" data-testid="set-webhookfail" ${c.simulateWebhookFailure ? 'checked' : ''}>
+        <label for="webhookfail" style="margin:0">Simulate missing publish-confirmation webhook (demo)</label>
+      </div>
+      <h2>Plugin API</h2>
+      <p class="dim">API key for the WordPress plugin: <span class="mono" data-testid="api-key">${esc(c.apiKey)}</span></p>
+      <p class="dim mono">GET /api/plugin/published · GET /api/plugin/performance · GET /api/plugin/notifications · POST /api/plugin/settings · POST /api/plugin/content-decision · POST /api/plugin/visibility-decision · POST /api/plugin/publish-confirmation</p>
+      <p style="margin-top:14px"><button class="primary" type="submit" data-testid="set-save">Save settings</button></p>
+    </form>`;
+}
+
+refresh();
+
+</script>
+<script>
+/* Guided tour for the interactive demo. Spotlights console elements with
+ * coach-mark bubbles. Auto-starts on first visit (localStorage flag),
+ * replayable via the banner button. Inlined into demo.html by build-demo.js. */
+(function () {
+  const DONE_KEY = 'aureva-tour-done';
+
+  const style = document.createElement('style');
+  style.textContent = `
+#tour .tour-blocker { position: fixed; inset: 0; z-index: 60; }
+#tour .tour-hole { position: fixed; z-index: 61; border-radius: 10px; pointer-events: none;
+  box-shadow: 0 0 0 9999px rgba(5,8,12,.74); border: 1.5px solid var(--accent);
+  transition: all .25s ease; animation: tourpulse 1.6s ease-in-out infinite; }
+@keyframes tourpulse { 50% { border-color: rgba(212,162,76,.35); } }
+#tour .tour-bubble { position: fixed; z-index: 62; background: var(--panel);
+  border: 1px solid var(--accent); border-radius: 12px; padding: 16px 18px;
+  box-shadow: 0 12px 44px rgba(0,0,0,.65); transition: top .25s ease, left .25s ease; }
+#tour .tour-title { font-weight: 700; color: var(--accent); margin-bottom: 6px; font-size: 14px; }
+#tour .tour-text { font-size: 13px; color: var(--text); line-height: 1.55; }
+#tour .tour-text b { color: var(--accent2); }
+#tour .tour-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; gap: 8px; }
+#tour .tour-progress { color: var(--dim); font-size: 12px; white-space: nowrap; }
+#tour .tour-btns { display: flex; gap: 6px; }
+#tour button { padding: 5px 12px; font-size: 12px; }`;
+  document.head.appendChild(style);
+
+  const steps = [
+    {
+      title: 'Welcome to the Aureva pipeline console',
+      text: 'Seven agents take a client from onboarding to AI citations — Research, Brief, Writer, Quality, Publish, Monitor, Optimize. Everything here is <b>really running in your browser</b>: real agents, real gates, real scoring, with mock external APIs. Click anywhere (or Next) to take the 60-second tour.'
+    },
+    {
+      sel: '[data-testid="client-list"]',
+      title: 'Three demo clients are pre-loaded',
+      text: '<b>Meridian Legal</b> has been through the whole loop: 12 articles live, a citation drop detected and auto-optimized. <b>Nordwind SaaS</b> is mid-flow with drafts waiting for client review. <b>Tandartspraktijk Elzenhof</b> is a Dutch, regulated dental practice — full Dutch content, compliance gate, weekly visibility report. Every client has fully separate state.'
+    },
+    {
+      sel: '[data-testid="tab-profile"]',
+      title: 'Onboarding starts with a brand profile gate',
+      text: 'A deep intake (company description, tone, brand rules, audiences, NL/EN, <b>regulated-industry flag</b>) is drafted into a brand profile together with a site crawl. <b>Nothing is written until a specialist approves it.</b> The Research agent then generates a 40–100 prompt set, intent-grouped, that the client sees read-only after approval.'
+    },
+    {
+      sel: '[data-testid="run-full"]',
+      pre: () => { window.setTab('pipeline'); },
+      title: 'One click runs the whole pipeline',
+      text: 'Research → Brief → Writer → Quality → Publish, in sequence. It <b>halts at every human gate</b> — a specialist must approve the content plan, and (optionally) the client must approve drafts — then resumes where it left off.'
+    },
+    {
+      sel: '[data-testid="stage-research"]',
+      title: '…or run any agent on its own',
+      text: 'Each of the 7 cards is one agent, independently triggerable. Under each you see its last result with a status: <b>PASS</b>, <b>NEEDS REVIEW</b>, <b>FAIL</b> or <b>ESCALATE TO HUMAN</b> — the same statuses the agents pass to each other.'
+    },
+    {
+      sel: '#tab-body',
+      pre: () => { window.setTab('plan'); },
+      title: 'The plan gate',
+      text: 'Research produced this keyword plan — <b>long-tail, low-competition first</b>, grouped into hub-and-spoke clusters. Nothing gets written until a specialist clicks Approve. This one is a <b>v2 plan</b>: it already contains a content gap fed back by the Monitor agent.'
+    },
+    {
+      sel: '#tab-body',
+      pre: () => { window.setTab('content'); },
+      title: 'Every article is scored before it can go live',
+      text: 'The Quality agent scores drafts 0–100 on GEO criteria (direct answer, entities, facts, FAQ, schema…). Below threshold → <b>sent back to the Writer</b>, rewritten, rescored. Note the <b>attempt column</b>: some drafts needed a retry. Click <b>View</b> on any article for the full score breakdown.'
+    },
+    {
+      sel: '#tab-body',
+      pre: () => { window.setTab('publishing'); },
+      title: 'Published, indexed, AI-discoverable',
+      text: 'Each post goes live with metadata, canonical and JSON-LD schema — open one via its link. After every publish the <b>llms.txt</b> discovery file is regenerated and <b>IndexNow + Search Console</b> are pinged. Publishing refuses to run if robots.txt blocks AI crawlers.'
+    },
+    {
+      sel: '#tab-body',
+      pre: () => { window.setTab('monitoring'); },
+      title: 'The watchtower — and the loop',
+      text: 'Weekly reports track rankings, traffic and <b>citation status per AI engine</b> (ChatGPT, Gemini, Perplexity, Google AI Overview). Prompt tracking runs every prompt <b>3× per engine</b> and separates <b>mention rate</b> from <b>citation rate</b>, with 4-week rolling averages against the pre-engagement baseline. Open <b>Web ↗</b> for the shareable client report — or <b>Demo ↗</b> for the anonymised sales version. A dropped citation flags the page; the <b>Optimizer</b> republishes and feeds gaps back to Research.'
+    },
+    {
+      sel: '[data-testid="tab-escalations"]',
+      title: 'When agents need a human',
+      text: 'Anything the machine can’t resolve — quality failures after max retries, blocked crawlers — lands in the <b>escalation queue</b> for one-click resolution. Combined with the per-client <b>audit log</b> (next tab), every decision is traceable.'
+    },
+    {
+      sel: '#tab-body',
+      pre: () => { window.setTab('settings'); },
+      title: 'Tune the machine per client',
+      text: 'Quality threshold, retry limit, drop sensitivity, auto-publish vs client review — all configurable. Try setting the quality minimum to <b>101</b> and running the pipeline to watch escalations happen. This is also where the <b>WordPress plugin API key</b> lives.'
+    },
+    {
+      title: 'Your turn',
+      text: 'Onboard your own client, approve plans, reject drafts, break things. <b>Reset demo data</b> in the top banner restores this seeded state, and <b>Show tour</b> replays this walkthrough. Enjoy.',
+      pre: () => { window.setTab('pipeline'); }
+    }
+  ];
+
+  let i = 0, root = null;
+
+  function build() {
+    root = document.createElement('div');
+    root.id = 'tour';
+    root.innerHTML = `
+      <div class="tour-blocker"></div>
+      <div class="tour-hole"></div>
+      <div class="tour-bubble" data-testid="tour-bubble">
+        <div class="tour-title"></div>
+        <div class="tour-text"></div>
+        <div class="tour-foot">
+          <span class="tour-progress" data-testid="tour-progress"></span>
+          <span class="tour-btns">
+            <button class="tour-back" data-testid="tour-back">Back</button>
+            <button class="tour-skip" data-testid="tour-skip">Skip</button>
+            <button class="tour-next primary" data-testid="tour-next">Next</button>
+          </span>
+        </div>
+      </div>`;
+    document.body.appendChild(root);
+    root.querySelector('.tour-back').onclick = (e) => { e.stopPropagation(); i = Math.max(0, i - 1); show(); };
+    root.querySelector('.tour-next').onclick = (e) => { e.stopPropagation(); next(); };
+    root.querySelector('.tour-skip').onclick = (e) => { e.stopPropagation(); end(); };
+    root.querySelector('.tour-blocker').onclick = next;
+    window.addEventListener('resize', () => { if (root.style.display !== 'none') position(); });
+  }
+
+  function start() { if (!root) build(); i = 0; root.style.display = 'block'; show(); }
+  function next() { if (i >= steps.length - 1) return end(); i++; show(); }
+  function end() { localStorage.setItem(DONE_KEY, '1'); if (root) root.style.display = 'none'; }
+
+  function show() {
+    const s = steps[i];
+    if (s.pre) { try { s.pre(); } catch (e) { /* view not available; bubble centers */ } }
+    root.querySelector('.tour-title').textContent = s.title;
+    root.querySelector('.tour-text').innerHTML = s.text;
+    root.querySelector('.tour-progress').textContent = `${i + 1} / ${steps.length}`;
+    root.querySelector('.tour-back').style.visibility = i ? 'visible' : 'hidden';
+    root.querySelector('.tour-next').textContent = i === steps.length - 1 ? 'Finish' : 'Next';
+    setTimeout(position, 90); // let the tab render before measuring
+  }
+
+  function position() {
+    const s = steps[i];
+    const t = s.sel ? document.querySelector(s.sel) : null;
+    const hole = root.querySelector('.tour-hole');
+    const b = root.querySelector('.tour-bubble');
+    b.style.width = Math.min(360, innerWidth - 24) + 'px';
+    if (!t) {
+      hole.style.display = 'none';
+      b.style.top = '50%'; b.style.left = '50%'; b.style.transform = 'translate(-50%,-50%)';
+      return;
+    }
+    t.scrollIntoView({ block: 'center' });
+    const r = t.getBoundingClientRect();
+    const pad = 6;
+    hole.style.display = 'block';
+    hole.style.top = (r.top - pad) + 'px';
+    hole.style.left = (r.left - pad) + 'px';
+    hole.style.width = (r.width + pad * 2) + 'px';
+    hole.style.height = (r.height + pad * 2) + 'px';
+    b.style.transform = 'none';
+    const bw = b.offsetWidth, bh = b.offsetHeight;
+    let top = r.bottom + pad + 12;
+    if (top + bh > innerHeight - 12) top = Math.max(12, r.top - pad - bh - 12);
+    const left = Math.min(Math.max(12, r.left), innerWidth - bw - 12);
+    b.style.top = top + 'px';
+    b.style.left = left + 'px';
+  }
+
+  window.demoTour = { start };
+
+  // auto-start on first visit, once the console has rendered
+  if (!localStorage.getItem(DONE_KEY)) {
+    let tries = 0;
+    const timer = setInterval(() => {
+      if (document.querySelector('[data-testid="client-name"]')) { clearInterval(timer); start(); }
+      else if (++tries > 50) clearInterval(timer);
+    }, 100);
+  }
+})();
+
+</script>
+</body>
+</html>
