@@ -1867,6 +1867,7 @@ __define('orchestrator', function (module, exports, require) {
 // central audit log.
 const agents = require('./agents');
 const mock = require('./adapters/mock');
+const intake = require('./intake');
 const { uid, now } = require('./util');
 
 const STAGES = ['baseline', 'research', 'brief', 'writer', 'quality', 'publish', 'monitor', 'optimize', 'full'];
@@ -1961,6 +1962,7 @@ function createClient(store, input) {
     pendingGaps: [],
     monitorRuns: 0,
     audit: [],
+    proprietaryIntake: null,  // copy pack Part A — captured client knowledge (v4 §4.2)
     wp: { posts: [], llmsTxt: '', sitemap: '', pings: [] }
   };
   audit(client, 'system', 'INFO', `Client onboarded (${client.reviewMode} mode). Plugin API key issued.`);
@@ -2324,6 +2326,24 @@ function updateSettings(store, clientId, input) {
   return client;
 }
 
+// Save the proprietary-knowledge intake (copy pack Part A). Stores the raw
+// answers and the routed downstream buckets (Q7/Q8 → prompt seeds, Q13 →
+// verified facts, Q14 → regulated constraints, Q15 → exclusion list). The
+// consumers of those buckets ship with the real prompt-runner and hallucination
+// monitor (v5 §2); this just captures and routes the material.
+function saveProprietaryIntake(store, clientId, answers) {
+  const client = store.getClient(clientId);
+  if (!client) { const e = new Error('Client not found'); e.status = 404; throw e; }
+  const routed = intake.routeAnswers(answers || {});
+  const answered = Object.values(answers || {}).filter(v => String(v || '').trim()).length;
+  client.proprietaryIntake = { answers: answers || {}, routed, answered, submittedAt: now() };
+  audit(client, 'system', 'INFO',
+    `Proprietary-knowledge intake saved (${answered}/${intake.allQuestions().length} answered; ` +
+    `${routed.promptSeeds.length} prompt seeds captured).`);
+  store.save();
+  return client.proprietaryIntake;
+}
+
 // One-time backfill for clients created before v1.3 (runs at server start and
 // demo-shim load). Purely additive: portal token, snapshots array, decay
 // threshold, prompt stage/persona/region, and the frozen GSC block — the GSC
@@ -2334,6 +2354,7 @@ function migrateClients(store) {
   for (const c of store.clients()) {
     if (!c.portalToken) { c.portalToken = uid('pt'); touched = true; }
     if (!Array.isArray(c.snapshots)) { c.snapshots = []; touched = true; }
+    if (c.proprietaryIntake === undefined) { c.proprietaryIntake = null; touched = true; }
     if (c.thresholds && c.thresholds.decayThreshold == null) {
       c.thresholds.decayThreshold = DEFAULT_THRESHOLDS.decayThreshold; touched = true;
     }
@@ -2366,7 +2387,7 @@ module.exports = {
   STAGES, DEFAULT_THRESHOLDS, createClient, runStage,
   profileDecision, promptSetDecision,
   planDecision, articleDecision, visibilityDecision, publishConfirmation,
-  reportDecision, resolveEscalation, updateSettings, migrateClients
+  reportDecision, resolveEscalation, updateSettings, saveProprietaryIntake, migrateClients
 };
 
 });
@@ -2379,6 +2400,7 @@ __define('brand', function (module, exports, require) {
 // code changes anywhere else.
 const DEFAULT_BRAND = {
   name: 'AUREVA',
+  displayName: 'Aureva', // brand name as it reads in client-facing prose (logoText stays the uppercase mark)
   accentColor: '#0f6f5c',
   logoText: 'AUREVA'
 };
@@ -2401,8 +2423,8 @@ __define('report', function (module, exports, require) {
 'use strict';
 // Weekly web report (SPEC §10.4 + §11): standalone shareable HTML — token-gated,
 // printable to PDF, and anonymisable for sales calls (demo mode swaps the
-// client identity while every metric stays real). Structure is Ole's;
-// all client-facing prose is placeholder copy that Sami owns.
+// client identity while every metric stays real). Structure is Ole's; the
+// client-facing prose (intro/closing) is Sami's copy pack v1, Part B.
 //
 // v1.3 naming migration (§11.2): the client-facing metrics are Visibility
 // (share of tracked prompts where the brand appears) and Link Rate (share of
@@ -2415,6 +2437,15 @@ const ENGINE_LABEL = { chatgpt: 'ChatGPT', gemini: 'Gemini', perplexity: 'Perple
 
 function esc(s) { return String(s ?? '').replace(/[&<>"]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m])); }
 function pct(x) { return `${(x * 100).toFixed(0)}%`; }
+
+// Copy pack B.5 "refresh explainer" — the one-line note shown against each
+// refreshed item in the report. Refresh EXECUTION is backlog (BUILD-v1.3 §6:
+// scoring/watchlist only until publishing is proven on real domains), so there
+// are no refreshed items to attach this to yet. Kept here, ready to render
+// beside refreshed pages the moment the refresh loop ships.
+const REFRESH_EXPLAINER =
+  'Refreshed: this existing page was updated rather than replaced — same address, stronger content. ' +
+  'AI engines reward pages that stay current, and updating preserves everything the page has already earned.';
 
 // Demo mode: swap the client identity, keep the data. Competitor domains are
 // mapped to stable letters so tables stay readable.
@@ -2536,6 +2567,8 @@ td.yes { color: var(--accent); font-weight: 600; }
 td.no { color: #9a3b3b; }
 td.nobody { color: var(--dim); font-style: italic; }
 .note { background: #fff; border-left: 3px solid var(--accent); padding: 10px 14px; margin: 16px 0; font-size: 13.5px; }
+.intro, .closing { border-left: 3px solid var(--accent); padding: 4px 16px; margin: 18px 0; }
+.intro p, .closing p { margin: 10px 0; }
 .placeholder { background: #fbf6e9; border: 1px dashed #cdb87a; padding: 10px 14px; font-size: 13px; color: #6b5d2e; margin: 16px 0; }
 .printbtn { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 8px 16px; font-size: 14px; cursor: pointer; }
 @media print {
@@ -2555,8 +2588,15 @@ td.nobody { color: var(--dim); font-style: italic; }
   <button class="printbtn" onclick="window.print()">Print / save as PDF</button>
 </header>
 
-<div class="placeholder">[Placeholder intro copy — final client-facing prose is owned and written by ${esc(brand.name)}.
-This section will summarise the week in one paragraph for the client.]</div>
+<div class="intro">
+  <p>This is your weekly visibility report. Everything in it is measured against your frozen baseline — the state
+  of your visibility before we started — so what you're seeing is always total progress, not a snapshot in
+  isolation.</p>
+  <p>One thing to know about how we measure: AI engines don't give the same answer twice. The same question,
+  asked twice in one day, can name different companies. So we ask every question multiple times, across five
+  engines, and report the trend over rolling four-week windows rather than any single day's answers. When a
+  number moves in this report, it moved for real.</p>
+</div>
 
 ${sc ? `
 <div class="tiles">${tiles}</div>
@@ -2595,7 +2635,21 @@ on a single observation.</p>` : ''}
 <h2>Traffic (GA4)</h2>
 <p class="dim">Organic sessions: ${report.ga4.organicSessions} · Engagement rate: ${report.ga4.engagementRate} · Conversions: ${report.ga4.conversions}</p>
 
-<div class="placeholder">[Placeholder closing copy — next steps and recommendations, written by ${esc(brand.name)}.]</div>
+<div class="closing">
+  <p><strong>What happens next:</strong> the plan for the coming period is already in motion — new content against
+  the gaps this report shows, and refreshes where existing pages can work harder. Anything needing your decision
+  is waiting in your portal.</p>
+  <!--
+    PENDING — copy pack B.4, flagged for Sami's decision (2026-07-22).
+    Sami's closing ends: "Questions about anything in here? Reply directly to this
+    report — it reaches a person, not a mailbox." That promise is not wired: reports
+    are served in-portal (not emailed), and there is no reply-routing to an inbox.
+    Per Sami's own note ("if that's not wired yet, tell me and I'll adjust the line"),
+    rendering an honest portal-based interim until email delivery + reply routing ship.
+  -->
+  <p class="dim">Questions about anything in here? Leave a note in your portal — it reaches a person, not a
+  mailbox.</p>
+</div>
 <p class="dim small">Generated by the ${esc(brand.name)} pipeline · report #${report.week} · baseline recorded before engagement start.</p>
 </div></body></html>`;
 }
