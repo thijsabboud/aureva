@@ -2350,6 +2350,14 @@ function migrateClients(store) {
         }
       }
     }
+    // Frozen week-0 appearance snapshot for clients whose prompt set was
+    // approved before this feature existed (deterministic, so a backfill equals
+    // what approval would have captured). Feeds the visibility screen's
+    // baseline anchor and the report's baseline scorecard.
+    if (c.baseline && !c.baseline.promptRun && c.promptSet && c.promptSet.status === 'approved') {
+      c.baseline.promptRun = agents.appearanceSnapshot(c, 0);
+      touched = true;
+    }
   }
   if (touched) store.save();
 }
@@ -2604,6 +2612,21 @@ const __orch = __require('orchestrator');
 const __mock = __require('mock');
 const __report = __require('report');
 const __DEMO_KEY = 'aureva-demo-db';
+
+// Seeded-data schema version. A visitor who opened an older bundle still has
+// that bundle's seed in localStorage, and the seed only runs when no clients
+// exist — so a stale db would keep showing pre-v1.3 data (no visibility
+// scorecard, no frozen week-0 snapshot, no decay). Bump this whenever the
+// seeded shape changes: a mismatch clears the stored db so the current bundle
+// re-seeds fresh. (The "Reset demo data" button does the same thing manually.)
+const __SEED_VERSION = 'v1.3';
+const __VERSION_KEY = 'aureva-demo-version';
+try {
+  if (localStorage.getItem(__VERSION_KEY) !== __SEED_VERSION) {
+    localStorage.removeItem(__DEMO_KEY);
+    localStorage.setItem(__VERSION_KEY, __SEED_VERSION);
+  }
+} catch { /* private mode / storage disabled — falls through to a fresh seed */ }
 
 const __store = {
   db: (() => {
