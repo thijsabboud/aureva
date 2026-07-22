@@ -996,6 +996,406 @@ module.exports = {
 
 });
 
+__define('brand', function (module, exports, require) {
+'use strict';
+// White-label groundwork (v1.3 item 5 / v5 §5.2): the ONE place the brand
+// identity lives. The web report and the client portal read it; swapping the
+// brand for a white-label partner means overriding AUREVA_BRAND (JSON) — no
+// code changes anywhere else.
+const DEFAULT_BRAND = {
+  name: 'AUREVA',
+  displayName: 'Aureva', // brand name as it reads in client-facing prose (logoText stays the uppercase mark)
+  accentColor: '#0f6f5c',
+  logoText: 'AUREVA'
+};
+
+function getBrand() {
+  const env = typeof process !== 'undefined' && process.env && process.env.AUREVA_BRAND;
+  if (!env) return { ...DEFAULT_BRAND };
+  try {
+    return { ...DEFAULT_BRAND, ...JSON.parse(env) };
+  } catch {
+    return { ...DEFAULT_BRAND };
+  }
+}
+
+module.exports = { getBrand, DEFAULT_BRAND };
+
+});
+
+__define('prompt-runner', function (module, exports, require) {
+'use strict';
+// Prompt-runner adapter — THE DATA ASSET / MOAT. Executes a client's approved
+// prompt set against the AI engines and records every run: the per-client
+// prompt-run history nobody else owns. This is the live seam that, once real
+// engine credentials land, replaces the deterministic prompt mocks exactly the
+// way live-crawl.js replaced the crawler mock (via a stored artifact the
+// existing consumers read through a resolver — no rewrite of the metric math).
+//
+// Boundary: a PROVIDER performs one (engine, prompt) query and returns a parsed
+// observation. The runner fans that over prompt × engine × run, timestamps it,
+// and the orchestrator stores it on the client. Two providers ship today:
+//   mockProvider — deterministic, derived from the existing mock so the demo
+//     and tests run with zero credentials and stay byte-consistent with current
+//     behaviour (a stored mock week reproduces today's Visibility/Link Rate).
+//   liveProvider — per-engine stubs that throw until credentials + answer
+//     parsing are wired. Recommended transport per engine documented inline.
+//     NO headless browsers / detector evasion (v5 §7 do-not-build).
+//
+// Storage: run records append to client.promptRunHistory[] (the asset is the
+// history; a re-run of the same week replaces that week only). Behind
+// store.js → Postgres later.
+const mock = require('./mock');
+
+// Keep the volatility discipline: ≥3 runs per prompt per engine, never single-run.
+const RUNS_PER_PROMPT = mock.PROMPT_RUNS;
+
+// An OBSERVATION (one run of one prompt on one engine):
+//   { mentioned:boolean, cited:boolean, position:1..10|null,
+//     insteadOf:'competitor:<domain>'|null, answerRef:string|null }
+// answerRef points at the stored raw answer text — the input to verified-facts /
+// hallucination monitoring (v5 §2). null for the mock (no real answer captured).
+
+// ---- Providers --------------------------------------------------------------
+
+// Deterministic provider: reuses the existing mock primitives so a stored run
+// is exactly consistent with the on-the-fly mock the pipeline uses today.
+function mockProvider() {
+  return {
+    id: 'mock',
+    // eslint-disable-next-line no-unused-vars
+    async query(engine, promptText, ctx) {
+      const run = mock.promptRunCheck(ctx.client.id, promptText, engine, ctx.week, ctx.runIdx);
+      // week-level appearance detail (position / who-appears-instead); only
+      // meaningful for the mock's notion of position, which is week-stable.
+      const appear = mock.promptAppearance(ctx.client, promptText, engine, ctx.week);
+      return {
+        mentioned: run.mentioned,
+        cited: run.cited,
+        position: run.mentioned ? appear.position : null,
+        insteadOf: run.mentioned ? null : appear.insteadOf,
+        answerRef: null
+      };
+    }
+  };
+}
+
+// Per-engine live transports. Recommendation (Ole to confirm before keys go in):
+// first-party API per engine + a SERP provider for Google AI Overview (which has
+// no first-party API). DataForSEO is already a listed KPI source (v4). Explicitly
+// NOT headless browsers.
+const LIVE_TRANSPORT = {
+  claude: 'Anthropic Messages API + web_search tool → parse cited domains from the answer',
+  perplexity: 'Perplexity sonar API → native citations array (cleanest link signal)',
+  gemini: 'Google Gemini API with Search grounding → groundingMetadata citations',
+  chatgpt: 'OpenAI Responses API + web_search tool → url_citation annotations',
+  google_ai_overview: 'DataForSEO SERP API (AI Overview element) — no first-party API exists'
+};
+
+// Live provider stub: each engine throws until its transport + credentials are
+// wired. Kept as one place so wiring an engine is filling one branch.
+function liveProvider(config = {}) {
+  return {
+    id: 'live',
+    config,
+    // eslint-disable-next-line no-unused-vars
+    async query(engine, promptText, ctx) {
+      const transport = LIVE_TRANSPORT[engine] || 'unknown engine';
+      const err = new Error(
+        `Prompt-runner live provider not configured for "${engine}". ` +
+        `Wire: ${transport}. Provide credentials in the provider config.`
+      );
+      err.code = 'PROVIDER_NOT_CONFIGURED';
+      throw err;
+    }
+  };
+}
+
+// ---- Runner -----------------------------------------------------------------
+
+// Execute the approved prompt set for one week → a run record. Pure w.r.t. the
+// store; the orchestrator persists the result (runPromptWeek).
+async function runWeek(client, week, provider = mockProvider()) {
+  if (!client.promptSet || client.promptSet.status !== 'approved') {
+    const e = new Error('No approved prompt set to run'); e.status = 400; throw e;
+  }
+  const prompts = [];
+  for (const group of client.promptSet.groups) {
+    for (const prompt of group.prompts) {
+      const engines = {};
+      for (const engine of mock.ENGINES) {
+        const runs = [];
+        for (let runIdx = 0; runIdx < RUNS_PER_PROMPT; runIdx++) {
+          runs.push(await provider.query(engine, prompt.text, { client, week, runIdx }));
+        }
+        engines[engine] = { runs };
+      }
+      prompts.push({
+        promptId: prompt.id, text: prompt.text,
+        stage: prompt.stage || null, intent: group.intent, engines
+      });
+    }
+  }
+  return {
+    week,
+    provider: provider.id,
+    runsPerPrompt: RUNS_PER_PROMPT,
+    startedAt: new Date().toISOString(),
+    prompts
+  };
+}
+
+// ---- Read seam (what makes stored history flow into the metrics) ------------
+// Both resolvers prefer a stored real run for the (prompt, engine, week); they
+// fall back to the deterministic mock so behaviour is unchanged until real
+// history exists — the same gating idea as client.crawlCache for the crawler.
+
+function storedPrompt(client, promptText, week) {
+  const rec = (client.promptRunHistory || []).find(r => r.week === week);
+  if (!rec) return null;
+  return rec.prompts.find(p => p.text === promptText) || null;
+}
+
+// The {mentioned,cited} primitive (drives internal run-based rates).
+function resolveRun(client, promptText, engine, week, runIdx) {
+  const p = storedPrompt(client, promptText, week);
+  const obs = p && p.engines[engine] && p.engines[engine].runs[runIdx];
+  if (obs) return { mentioned: !!obs.mentioned, cited: !!obs.cited };
+  return mock.promptRunCheck(client.id, promptText, engine, week, runIdx);
+}
+
+// The week-level appearance cell (drives client-facing Visibility / Link Rate
+// and the visibility-screen table). Derived from the stored runs when present.
+function resolveAppearance(client, promptText, engine, week) {
+  const p = storedPrompt(client, promptText, week);
+  const cell = p && p.engines[engine];
+  if (cell) {
+    let appeared = false, linked = false, position = null, insteadOf = null;
+    for (const obs of cell.runs) {
+      if (obs.mentioned) { appeared = true; if (position == null) position = obs.position; }
+      if (obs.cited) linked = true;
+      if (!appeared && insteadOf == null && obs.insteadOf) insteadOf = obs.insteadOf;
+    }
+    return {
+      appeared, linked,
+      position: appeared ? (position || 1) : null,
+      insteadOf: appeared ? null : insteadOf
+    };
+  }
+  return mock.promptAppearance(client, promptText, engine, week);
+}
+
+module.exports = {
+  runWeek, resolveRun, resolveAppearance,
+  mockProvider, liveProvider, LIVE_TRANSPORT, RUNS_PER_PROMPT
+};
+
+});
+
+__define('intake', function (module, exports, require) {
+'use strict';
+// Proprietary-knowledge intake (copy pack v1, Part A / technical brief v4 §4.2,
+// mechanism 2). This is the one onboarding section that captures what only the
+// client knows — their numbers, cases, opinions, boundaries — the material that
+// is our primary defence against template output.
+//
+// Copy is Sami's, verbatim, INCLUDING the "why we ask" lines: those are shown to
+// the client on purpose (they lift answer quality), not stripped as internal
+// notes. Structure/wiring is Ole's.
+//
+// The `feeds` tag on a question records where its answer is routed downstream
+// (Sami's FOR OLE notes):
+//   promptSeeds        — Q7/Q8 seed the prompt-set generator as HIGH-PRIORITY
+//                        seeds alongside the Research agent's own derivation;
+//                        the client's phrasing outranks derived phrasing.
+//   verifiedFacts      — Q13 feeds the verified-facts record for hallucination
+//                        monitoring (v5 §2) — one capture, two uses.
+//   regulatedConstraints — Q14 populates the regulated-industry constraints that
+//                        feed the quality gate directly.
+//   exclusionList      — Q15 is a hard exclusion list the system respects
+//                        permanently: asked once, enforced always.
+// The generator / quality-gate CONSUMERS of these buckets are backlog (they land
+// with the real prompt-runner and hallucination monitoring, v5 §2). This module
+// captures and routes the material so it is ready the moment they ship.
+const { getBrand } = require('./brand');
+
+function esc(s) { return String(s ?? '').replace(/[&<>"]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m])); }
+
+// A.0 — client-facing intro, shown above the questions (copy pack A.0).
+const INTRO = [
+  "This part of onboarding is different from the rest — and it's the part that matters most.",
+  "Anyone can publish generic articles about your industry. The internet is full of them, and AI search engines have learned to ignore them. What gets cited is content containing things only you know: your real results, your actual cases, your honest opinions, the answers you give clients every week.",
+  "That knowledge is in your head. These questions get it out. Specific beats polished every time here — a rough answer with a real number is worth ten well-written paragraphs of general advice. Bullet points are fine. Typos are fine.",
+  "Everything can be anonymised before publication. Plan for roughly 45–60 minutes, and if you'd rather talk than type, we'll do it as a call and fill this in for you."
+];
+
+// A.1–A.5 — the 15 questions, verbatim, with their visible "why we ask" lines.
+const SECTIONS = [
+  {
+    id: 'a1', title: 'Your real results',
+    questions: [
+      { id: 'q1', n: 1, prompt: 'What results do clients typically get from working with you? Give real numbers wherever you can — percentages, amounts, timeframes.',
+        whyWeAsk: 'Specific outcomes are the single strongest citation material. "Clients typically save 10–15%" gets cited; "great results" does not.' },
+      { id: 'q2', n: 2, prompt: 'What is a result you are genuinely proud of? Describe the situation, what you did, and what changed — numbers included.',
+        whyWeAsk: 'This becomes anchor material for cornerstone content. One real story outperforms any amount of general expertise.' },
+      { id: 'q3', n: 3, prompt: 'How long do things actually take with you? Typical project length, delivery time, time-to-result — the honest version, not the brochure version.',
+        whyWeAsk: 'Buyers ask AI "how long does X take" constantly. The business that answers with real timeframes wins that query.' },
+      { id: 'q4', n: 4, prompt: "What does working with you typically cost, or what range can you state publicly? If you can't publish prices, what CAN you say about how pricing works?",
+        whyWeAsk: 'Price queries are among the highest-intent searches that exist. Even a range or a "how our pricing works" explanation captures them.' }
+    ]
+  },
+  {
+    id: 'a2', title: 'Your cases',
+    questions: [
+      { id: 'q5', n: 5, prompt: 'Describe three recent client situations: what problem they came with, what you did, and how it ended. A short paragraph each is enough. Mark any that must stay anonymous.',
+        whyWeAsk: 'Cases carry everything AI engines reward at once: specificity, first-hand experience, and proof. These three answers may generate more citations than everything else combined.', multiline: true },
+      { id: 'q6', n: 6, prompt: 'Describe one situation where you turned a client away, or told them NOT to buy something. What was it and why?',
+        whyWeAsk: 'Nothing signals genuine expertise like knowing the limits of your own service. This is content no competitor will have.', multiline: true }
+    ]
+  },
+  {
+    id: 'a3', title: 'The questions you actually get',
+    questions: [
+      { id: 'q7', n: 7, prompt: 'List the ten questions clients and prospects ask you most often — in their words, not yours.',
+        whyWeAsk: "These ARE the prompts people type into ChatGPT. Your client's phrasing beats any keyword we could run.",
+        feeds: 'promptSeeds', multiline: true },
+      { id: 'q8', n: 8, prompt: "For each, give the answer you actually give — short, honest, the way you'd say it across a table.",
+        whyWeAsk: 'The writer builds answer-first content directly from these. Your voice, your answers, structured for citation.',
+        feeds: 'promptSeeds', multiline: true },
+      { id: 'q9', n: 9, prompt: 'What do prospects consistently misunderstand or get wrong before they talk to you?',
+        whyWeAsk: "Misconception content earns citations because it says something the generic articles don't — and it pre-sells your expertise.", multiline: true }
+    ]
+  },
+  {
+    id: 'a4', title: 'Your opinions',
+    questions: [
+      { id: 'q10', n: 10, prompt: 'What do you believe about your industry that most of your competitors would disagree with?',
+        whyWeAsk: 'Contrarian, defensible positions are premium citation material — they are unique information by definition.', multiline: true },
+      { id: 'q11', n: 11, prompt: 'What common advice in your industry is wrong or outdated, in your view? Why?',
+        whyWeAsk: 'Same mechanism, aimed at the generic advice flooding your category. This is how a small firm out-cites a big one.', multiline: true },
+      { id: 'q12', n: 12, prompt: 'What would you never do, even though others in your industry do it?',
+        whyWeAsk: 'Draws the sharpest possible line between this business and everyone else — in content and in sales conversations.', multiline: true }
+    ]
+  },
+  {
+    id: 'a5', title: 'Proof and boundaries',
+    questions: [
+      { id: 'q13', n: 13, prompt: 'List credentials, certifications, memberships, awards and press mentions — verifiable ones only, with the year.',
+        whyWeAsk: "These go into author bios and schema. Verifiable only: anything we can't check, we won't publish, for your protection and ours.",
+        feeds: 'verifiedFacts', multiline: true },
+      { id: 'q14', n: 14, prompt: 'Are there claims you must never make, topics to avoid, or rules your professional body sets for how you may advertise? (For regulated industries: name the body and the rules if you know them.)',
+        whyWeAsk: 'This feeds the quality gate directly. For regulated clients it tightens fact-checking automatically — nothing publishes that your regulator wouldn\'t allow.',
+        feeds: 'regulatedConstraints', multiline: true },
+      { id: 'q15', n: 15, prompt: "Is there anything true about your business you'd rather we never publish, even anonymised?",
+        whyWeAsk: 'A hard exclusion list the system respects permanently. Asked once, enforced always.',
+        feeds: 'exclusionList', multiline: true }
+    ]
+  }
+];
+
+// Flat list of every question, in order — convenient for validation/tests.
+function allQuestions() {
+  return SECTIONS.flatMap(s => s.questions);
+}
+
+// Route submitted answers into the downstream buckets per the `feeds` tags.
+// Only tagged, non-empty answers are routed. The buckets are stored on the
+// client; their consumers (prompt-set generator, quality gate, hallucination
+// monitor) read them when those systems ship.
+function routeAnswers(answers) {
+  const get = id => String((answers && answers[id]) || '').trim();
+  const routed = { promptSeeds: [], verifiedFacts: '', regulatedConstraints: '', exclusionList: '' };
+  for (const q of allQuestions()) {
+    const val = get(q.id);
+    if (!val || !q.feeds) continue;
+    if (q.feeds === 'promptSeeds') routed.promptSeeds.push({ questionId: q.id, source: q.id === 'q7' ? 'questions' : 'answers', text: val });
+    else routed[q.feeds] = val;
+  }
+  return routed;
+}
+
+// Client-facing intake page: intro, then the 15 questions with their visible
+// "why we ask" lines, posting back to /intake/:portalToken. Pre-fills any
+// answers already saved so the client can return to it.
+function renderIntake(client, opts = {}) {
+  const brand = opts.brand || getBrand();
+  const lang = client.profile && client.profile.primaryLanguage === 'nl' ? 'nl' : 'en';
+  const saved = (client.proprietaryIntake && client.proprietaryIntake.answers) || {};
+  const done = !!(client.proprietaryIntake && client.proprietaryIntake.submittedAt);
+
+  const sectionHtml = SECTIONS.map(sec => `
+    <section>
+      <h2>${esc(sec.title)}</h2>
+      ${sec.questions.map(q => `
+      <div class="q" data-testid="intake-q-${q.id}">
+        <label for="${q.id}"><span class="qn">${q.n}.</span> ${esc(q.prompt)}</label>
+        <p class="why"><strong>Why we ask:</strong> ${esc(q.whyWeAsk)}</p>
+        <textarea id="${q.id}" name="${q.id}" rows="${q.multiline ? 5 : 3}" data-testid="intake-input-${q.id}">${esc(saved[q.id] || '')}</textarea>
+      </div>`).join('')}
+    </section>`).join('');
+
+  return `<!doctype html><html lang="${lang}"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>${esc(brand.displayName)} — proprietary-knowledge intake</title>
+<style>
+:root { --ink:#1c2430; --dim:#68758a; --line:#dde3ec; --accent:${esc(brand.accentColor)}; --bg:#f6f8fb; }
+* { box-sizing: border-box; }
+body { font: 15px/1.55 -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); background: var(--bg); margin: 0; }
+.page { max-width: 760px; margin: 0 auto; padding: 32px 24px 80px; }
+header { border-bottom: 2px solid var(--ink); padding-bottom: 16px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+h2 { font-size: 16px; margin: 32px 0 8px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+.brandmark { font-weight: 700; letter-spacing: .12em; }
+.intro { border-left: 3px solid var(--accent); padding: 4px 16px; margin: 20px 0; }
+.intro p { margin: 10px 0; }
+.q { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin: 14px 0; }
+.q label { display: block; font-weight: 600; }
+.qn { color: var(--accent); }
+.why { color: var(--dim); font-size: 13px; margin: 6px 0 10px; }
+textarea { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font: inherit; resize: vertical; }
+.bar { position: sticky; bottom: 0; background: var(--bg); padding: 14px 0; margin-top: 8px; display: flex; gap: 12px; align-items: center; }
+button { border: 1px solid var(--accent); background: var(--accent); color: #fff; border-radius: 6px; padding: 9px 18px; font-size: 14px; font-weight: 600; cursor: pointer; }
+.status { color: var(--dim); font-size: 13px; }
+.saved { color: var(--accent); }
+</style></head><body><div class="page">
+<header>
+  <div class="brandmark">${esc(brand.logoText)}</div>
+  <h1>Proprietary-knowledge intake — ${esc(client.name)}</h1>
+  <p class="status" style="margin:0">This is captured once and stays yours. ${done ? '<span class="saved">Submitted — you can update any answer.</span>' : 'You can save and come back to it.'}</p>
+</header>
+
+<div class="intro" data-testid="intake-intro">${INTRO.map(p => `<p>${esc(p)}</p>`).join('')}</div>
+
+<form id="intake">
+${sectionHtml}
+<div class="bar">
+  <button type="submit" data-testid="intake-submit">Save my answers</button>
+  <span class="status" id="msg"></span>
+</div>
+</form>
+</div>
+<script>
+document.getElementById('intake').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const answers = {};
+  new FormData(e.target).forEach((v, k) => { answers[k] = v; });
+  const res = await fetch(location.pathname.replace(/\\/$/, ''), {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ answers })
+  });
+  const msg = document.getElementById('msg');
+  if (res.ok) { msg.textContent = 'Saved.'; msg.className = 'status saved'; }
+  else { msg.textContent = 'Something went wrong — please try again.'; msg.className = 'status'; }
+});
+<\/script>
+</body></html>`;
+}
+
+module.exports = { INTRO, SECTIONS, allQuestions, routeAnswers, renderIntake };
+
+});
+
 __define('agents', function (module, exports, require) {
 'use strict';
 // The 7 pipeline agents + the baseline audit (Agent 0). Each is a pure-ish
@@ -1003,6 +1403,7 @@ __define('agents', function (module, exports, require) {
 // status PASS | FAIL | NEEDS_REVIEW | ESCALATE_TO_HUMAN.
 // Orchestration (gates, retries, audit, escalations) lives in orchestrator.js.
 const mock = require('./adapters/mock');
+const promptRunner = require('./adapters/prompt-runner');
 const { uid, slugify, now } = require('./util');
 
 const COMP_RANK = { low: 0, medium: 1, high: 2 };
@@ -1106,7 +1507,8 @@ function appearanceSnapshot(client, week) {
       const engines = {};
       let app = false, lnk = false;
       for (const e of mock.ENGINES) {
-        const cell = mock.promptAppearance(client, prompt.text, e, week);
+        // resolver: prefers stored real prompt-run history, else the mock
+        const cell = promptRunner.resolveAppearance(client, prompt.text, e, week);
         cell.competitors = {};
         for (const d of competitors) {
           const ca = mock.competitorAppearance(client, d, prompt.text, e, week);
@@ -1717,7 +2119,7 @@ function trackPrompts(client, run) {
       for (const e of mock.ENGINES) {
         let m = 0, c = 0;
         for (let i = 0; i < runs; i++) {
-          const out = mock.promptRunCheck(client.id, prompt.text, e, run, i);
+          const out = promptRunner.resolveRun(client, prompt.text, e, run, i);
           if (out.mentioned) m++;
           if (out.cited) c++;
         }
@@ -1868,6 +2270,7 @@ __define('orchestrator', function (module, exports, require) {
 const agents = require('./agents');
 const mock = require('./adapters/mock');
 const intake = require('./intake');
+const promptRunner = require('./adapters/prompt-runner');
 const { uid, now } = require('./util');
 
 const STAGES = ['baseline', 'research', 'brief', 'writer', 'quality', 'publish', 'monitor', 'optimize', 'full'];
@@ -1962,6 +2365,7 @@ function createClient(store, input) {
     pendingGaps: [],
     monitorRuns: 0,
     audit: [],
+    promptRunHistory: [],     // per-client prompt-run records — the data asset (append-only across weeks)
     proprietaryIntake: null,  // copy pack Part A — captured client knowledge (v4 §4.2)
     wp: { posts: [], llmsTxt: '', sitemap: '', pings: [] }
   };
@@ -2344,6 +2748,30 @@ function saveProprietaryIntake(store, clientId, answers) {
   return client.proprietaryIntake;
 }
 
+// Run the approved prompt set for one week and store the record — the per-client
+// prompt-run history that is our compounding data asset (nobody else owns a
+// client's citation history). Mock provider by default (zero credentials, byte-
+// consistent with today's metrics); `live: true` selects the real-engine
+// provider once its transports are wired. Stored history then flows into the
+// metrics automatically via the resolvers in agents.js — no metric-math change.
+async function runPromptWeek(store, clientId, week, opts = {}) {
+  const client = store.getClient(clientId);
+  if (!client) { const e = new Error('Client not found'); e.status = 404; throw e; }
+  const provider = opts.live
+    ? promptRunner.liveProvider(opts.providerConfig || {})
+    : promptRunner.mockProvider();
+  const record = await promptRunner.runWeek(client, week, provider);
+  record.storedAt = now();
+  if (!Array.isArray(client.promptRunHistory)) client.promptRunHistory = [];
+  // append-only across weeks; a re-run of the same week replaces that week only
+  client.promptRunHistory = client.promptRunHistory.filter(r => r.week !== week).concat([record]);
+  audit(client, 'monitor', 'INFO',
+    `Prompt-run history recorded for week ${week} (${record.provider} provider, ` +
+    `${record.prompts.length} prompts × ${mock.ENGINES.length} engines × ${record.runsPerPrompt} runs).`);
+  store.save();
+  return record;
+}
+
 // One-time backfill for clients created before v1.3 (runs at server start and
 // demo-shim load). Purely additive: portal token, snapshots array, decay
 // threshold, prompt stage/persona/region, and the frozen GSC block — the GSC
@@ -2355,6 +2783,7 @@ function migrateClients(store) {
     if (!c.portalToken) { c.portalToken = uid('pt'); touched = true; }
     if (!Array.isArray(c.snapshots)) { c.snapshots = []; touched = true; }
     if (c.proprietaryIntake === undefined) { c.proprietaryIntake = null; touched = true; }
+    if (!Array.isArray(c.promptRunHistory)) { c.promptRunHistory = []; touched = true; }
     if (c.thresholds && c.thresholds.decayThreshold == null) {
       c.thresholds.decayThreshold = DEFAULT_THRESHOLDS.decayThreshold; touched = true;
     }
@@ -2387,35 +2816,9 @@ module.exports = {
   STAGES, DEFAULT_THRESHOLDS, createClient, runStage,
   profileDecision, promptSetDecision,
   planDecision, articleDecision, visibilityDecision, publishConfirmation,
-  reportDecision, resolveEscalation, updateSettings, saveProprietaryIntake, migrateClients
+  reportDecision, resolveEscalation, updateSettings, saveProprietaryIntake,
+  runPromptWeek, migrateClients
 };
-
-});
-
-__define('brand', function (module, exports, require) {
-'use strict';
-// White-label groundwork (v1.3 item 5 / v5 §5.2): the ONE place the brand
-// identity lives. The web report and the client portal read it; swapping the
-// brand for a white-label partner means overriding AUREVA_BRAND (JSON) — no
-// code changes anywhere else.
-const DEFAULT_BRAND = {
-  name: 'AUREVA',
-  displayName: 'Aureva', // brand name as it reads in client-facing prose (logoText stays the uppercase mark)
-  accentColor: '#0f6f5c',
-  logoText: 'AUREVA'
-};
-
-function getBrand() {
-  const env = typeof process !== 'undefined' && process.env && process.env.AUREVA_BRAND;
-  if (!env) return { ...DEFAULT_BRAND };
-  try {
-    return { ...DEFAULT_BRAND, ...JSON.parse(env) };
-  } catch {
-    return { ...DEFAULT_BRAND };
-  }
-}
-
-module.exports = { getBrand, DEFAULT_BRAND };
 
 });
 
@@ -2640,12 +3043,13 @@ on a single observation.</p>` : ''}
   the gaps this report shows, and refreshes where existing pages can work harder. Anything needing your decision
   is waiting in your portal.</p>
   <!--
-    PENDING — copy pack B.4, flagged for Sami's decision (2026-07-22).
-    Sami's closing ends: "Questions about anything in here? Reply directly to this
-    report — it reaches a person, not a mailbox." That promise is not wired: reports
-    are served in-portal (not emailed), and there is no reply-routing to an inbox.
-    Per Sami's own note ("if that's not wired yet, tell me and I'll adjust the line"),
-    rendering an honest portal-based interim until email delivery + reply routing ship.
+    DECIDED — copy pack B.4 reply line (Sami, 2026-07-22): keep the portal version
+    below as FINAL. Sami's original ("Reply directly to this report — it reaches a
+    person, not a mailbox") assumed emailed reports; reports are served in-portal, so
+    the portal-based line IS the promise the product keeps, and it pulls clients into
+    the portal by design. Email delivery + reply routing intentionally not built.
+    Backlog (Sami — a nudge, not reply routing): a weekly "your report is ready"
+    notification email with a link. See BUILD-v1.3.md backlog.
   -->
   <p class="dim">Questions about anything in here? Leave a note in your portal — it reaches a person, not a
   mailbox.</p>
@@ -2654,7 +3058,7 @@ on a single observation.</p>` : ''}
 </div></body></html>`;
 }
 
-module.exports = { renderReport };
+module.exports = { renderReport, REFRESH_EXPLAINER };
 
 });
 
