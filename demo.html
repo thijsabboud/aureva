@@ -155,7 +155,8 @@ __define('mock', function (module, exports, require) {
 // one-for-one: same function signatures, real transport.
 const { fnv1a, slugify, now, uid } = require('../util');
 
-const ENGINES = ['chatgpt', 'gemini', 'perplexity', 'google_ai_overview'];
+// v1.3: Claude is the fifth engine (BUILD-v1.3.md item 3).
+const ENGINES = ['chatgpt', 'gemini', 'perplexity', 'google_ai_overview', 'claude'];
 // July 2026 update §2.3: robots.txt must explicitly allow all six.
 const REQUIRED_BOTS = ['GPTBot', 'ClaudeBot', 'PerplexityBot', 'Googlebot', 'Gemini-Bot', 'Bingbot'];
 
@@ -231,6 +232,16 @@ function fanOutQueries(keyword, lang) {
 
 const INTENTS = ['informational', 'comparative', 'transactional', 'local'];
 const PROMPT_RUNS = 3; // runs per prompt per engine per week — never single-run
+
+// v1.3 prompt schema: funnel stage per prompt, heuristic from intent
+// (informational → awareness, comparative → consideration,
+// transactional/local → decision).
+const STAGE_OF_INTENT = {
+  informational: 'awareness',
+  comparative: 'consideration',
+  transactional: 'decision',
+  local: 'decision'
+};
 
 // Site-crawl brand signals mock — in production a crawler + LLM pass over the
 // client's existing pages feeds the brand-profile draft alongside the intake.
@@ -316,6 +327,11 @@ function generatePromptSet(client, version) {
   const lang = profile.primaryLanguage === 'nl' ? 'nl' : 'en';
   const audiences = (profile.audiences && profile.audiences.length)
     ? profile.audiences : ['prospective clients', 'evaluators'];
+  // v1.3 prompt schema: persona round-robins over the REAL profile audiences
+  // (null when none were provided); region is a placeholder anticipating NL/EN
+  // regional variants — only one variant runs for now.
+  const personaPool = (profile.audiences && profile.audiences.length) ? profile.audiences : null;
+  let personaIdx = 0;
   const seeds = client.keywords.length ? client.keywords : [client.niche];
   const groups = [];
   const seen = new Set();
@@ -326,7 +342,12 @@ function generatePromptSet(client, version) {
       const key = text.toLowerCase();
       if (seen.has(key)) return;
       seen.add(key);
-      prompts.push({ id: uid('pr'), text, language: lang });
+      prompts.push({
+        id: uid('pr'), text, language: lang,
+        stage: STAGE_OF_INTENT[intent],
+        persona: personaPool ? personaPool[personaIdx++ % personaPool.length] : null,
+        region: null
+      });
     };
     for (const kw of seeds) for (const tpl of templates.slice(0, 4)) add(tpl(kw));
     const audTpl = templates[4];
@@ -340,7 +361,12 @@ function generatePromptSet(client, version) {
     const g = groups[pad % groups.length];
     const tpl = PROMPT_TEMPLATES[lang][g.intent][pad % 4];
     const text = `${tpl(client.niche)} (${++pad})`;
-    g.prompts.push({ id: uid('pr'), text, language: lang });
+    g.prompts.push({
+      id: uid('pr'), text, language: lang,
+      stage: STAGE_OF_INTENT[g.intent],
+      persona: personaPool ? personaPool[personaIdx++ % personaPool.length] : null,
+      region: null
+    });
     total++;
   }
   while (total > 100) {
@@ -364,11 +390,76 @@ function generatePromptSet(client, version) {
 // cited = client URL used as a source — cited implies mentioned. The week is
 // part of the hash so weekly rates genuinely move (observable volatility),
 // with a mild upward trend as published content beds in.
+//
+// v1.3: appearance is CORRELATED across engines via a per-(prompt, week)
+// propensity — engines share retrieval behaviour, so a brand that appears for
+// a prompt tends to appear on several engines while weak prompts appear
+// nowhere. Without this, `appeared on ≥1 of 5 engines × 3 runs` saturates and
+// the client-facing Visibility metric pins at 100%.
 function promptRunCheck(clientId, prompt, engine, week, runIdx) {
+  const propensity = fnv1a(`${clientId}|${prompt}|w${week}`) % 10;   // 0–9, re-rolled weekly
+  const gate = propensity + Math.min(week, 4);                       // content beds in over weeks
   const h = fnv1a(`${clientId}|${prompt}|${engine}|w${week}|r${runIdx}`);
-  const mentioned = h % 10 < 4 + Math.min(week, 4);
-  const cited = mentioned && (h >> 3) % 10 < 2 + Math.min(week, 3);
+  const mentioned = gate >= 6 && h % 10 < gate;
+  // links are scarcer than mentions and equally correlated per prompt — an
+  // answer that links the site tends to do so wherever the brand appears
+  const linkPropensity = fnv1a(`${clientId}|${prompt}|w${week}|link`) % 10;
+  const cited = mentioned && linkPropensity < 3 + Math.min(week, 3) && (h >> 3) % 10 < 6;
   return { mentioned, cited };
+}
+
+// ---- Visibility-screen adapters (v1.3 item 4) --------------------------------
+
+// Prompt appearance for one (prompt, engine, week) cell — derived from the
+// week's promptRunCheck runs so it is exactly consistent with the run-based
+// rates: appeared = mentioned in ≥1 run, linked = cited in ≥1 run.
+// position = ordinal of the brand's first appearance among entities in the
+// simulated answer (1–10, our operational definition). When the client is
+// absent, insteadOf names the first competitor appearing on the cell, or null
+// for nobody — citation whitespace.
+function promptAppearance(client, promptText, engine, week) {
+  let appeared = false, linked = false;
+  for (let i = 0; i < PROMPT_RUNS; i++) {
+    const out = promptRunCheck(client.id, promptText, engine, week, i);
+    if (out.mentioned) appeared = true;
+    if (out.cited) linked = true;
+  }
+  if (appeared) {
+    const h = fnv1a(`${client.id}|${promptText}|${engine}|w${week}|pos`);
+    return { appeared: true, linked, position: 1 + (h % 10), insteadOf: null };
+  }
+  const comp = (client.competitors || [])
+    .map(c => String(c).replace(/^https?:\/\//, ''))
+    .find(domain => competitorAppearance(client, domain, promptText, engine, week));
+  return { appeared: false, linked: false, position: null, insteadOf: comp ? `competitor:${comp}` : null };
+}
+
+// Does a given competitor appear in the simulated answer for this cell?
+// Drives the competitor heatmap, insteadOf, and Share of Voice.
+function competitorAppearance(client, competitorDomain, promptText, engine, week) {
+  const h = fnv1a(`${client.id}|${competitorDomain}|${promptText}|${engine}|w${week}|comp`);
+  return h % 10 < 4;
+}
+
+// Traditional-search baseline (GSC mock): per seed keyword impressions,
+// clicks and average position + indexed page count. Captured once into the
+// FROZEN baseline at onboarding (v1.3 item 1) — deterministic per client, so
+// a backfill for pre-v1.3 clients equals what onboarding would have stored.
+function gscBaseline(client) {
+  const keywords = client.keywords.map(kw => {
+    const h = fnv1a(client.domain + kw + 'gsc0');
+    const impressions = 150 + (h % 1500);
+    return {
+      keyword: kw,
+      impressions,
+      clicks: Math.round(impressions * (0.01 + (h % 6) / 100)),
+      avgPosition: 8 + (h % 32)
+    };
+  });
+  return {
+    indexedPages: 3 + (fnv1a(client.domain + 'indexed') % 40),
+    keywords
+  };
 }
 
 // ---- Baseline audit adapters (Agent 0) ---------------------------------------
@@ -892,8 +983,9 @@ function countWords(article) {
 function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
 module.exports = {
-  ENGINES, REQUIRED_BOTS, INTENTS, PROMPT_RUNS,
+  ENGINES, REQUIRED_BOTS, INTENTS, PROMPT_RUNS, STAGE_OF_INTENT,
   crawlBrandSignals, generatePromptSet, promptRunCheck,
+  promptAppearance, competitorAppearance, gscBaseline,
   expandKeywords, autocomplete, competitorGaps, fanOutQueries,
   existingSite, scoreExistingPage, queryCitationOwner, findContradictions,
   gscKeywordData, ga4Data, articleVisitors, citationCheck, botVisits, impressionGaps,
@@ -951,7 +1043,7 @@ function baseline(client) {
   const avgCitability = Math.round(pages.reduce((s, p) => s + p.citability, 0) / pages.length);
 
   const live = !!(client.crawlCache && client.crawlCache.live);
-  client.baseline = {
+  const snap = {
     id: uid('base'),
     createdAt: now(),
     live,                                                   // true = real crawl data (v1.2.1)
@@ -962,6 +1054,7 @@ function baseline(client) {
     queries: queryBaseline,
     whitespace,
     robots,
+    gsc: mock.gscBaseline(client),                          // traditional-search baseline (v1.3)
     summary: {
       avgCitability,
       jsRenderedPages: pages.filter(p => p.jsRendered).length,
@@ -972,15 +1065,87 @@ function baseline(client) {
     }
   };
 
+  // v1.3 item 1: the baseline is written exactly once and frozen forever.
+  // Every later run is a dated current-state snapshot compared against it.
+  const isFirst = !client.baseline;
+  if (isFirst) {
+    client.baseline = snap;
+  } else {
+    client.snapshots = client.snapshots || [];
+    client.snapshots.push(snap);
+  }
+
   return {
     agent: 'baseline',
     status: robots.ok ? 'PASS' : 'ESCALATE_TO_HUMAN',
-    summary: `Baseline audit${live ? ' (LIVE crawl)' : ''}: ${pages.length} existing pages (avg citability ${avgCitability}/100), ` +
+    summary: `${isFirst ? 'Baseline audit (frozen at onboarding)' : `Current-state snapshot #${client.snapshots.length} recorded (baseline stays frozen)`}` +
+      `${live ? ' (LIVE crawl)' : ''}: ${pages.length} existing pages (avg citability ${avgCitability}/100), ` +
       `${contradictions.length} contradictions, ${whitespace.length}/${queryBaseline.length} queries with citation whitespace, ` +
       `robots.txt ${robots.ok ? 'allows all AI crawlers' : `BLOCKS ${robots.blocked.join(', ')}`}` +
-      (live && client.baseline.llmsTxt ? `, llms.txt ${client.baseline.llmsTxt.present ? 'present' : 'MISSING'}` : '') + '.',
+      (live && snap.llmsTxt ? `, llms.txt ${snap.llmsTxt.present ? 'present' : 'MISSING'}` : '') + '.',
     ...(robots.ok ? {} : { escalation: { reason: `Onboarding robots.txt audit: blocks ${robots.blocked.join(', ')}` } })
   };
+}
+
+// ---- Prompt appearance snapshot (v1.3 item 4) --------------------------------
+// One pass over the tracked prompt set for a given week: per-cell appearance
+// (appeared / linked / position / instead-of + competitor heatmap cells), the
+// client-facing scorecard (Visibility, Link Rate) and Share of Voice.
+// Used by Monitor every week AND captured once, frozen, as
+// client.baseline.promptRun when the prompt set is approved.
+function appearanceSnapshot(client, week) {
+  const competitors = (client.competitors || []).map(c => String(c).replace(/^https?:\/\//, ''));
+  const rows = [];
+  let total = 0, appearedPrompts = 0, linkedPrompts = 0;
+  const eng = {};
+  for (const e of mock.ENGINES) eng[e] = { appeared: 0, linked: 0, clientCells: 0, competitorCells: 0 };
+
+  for (const group of client.promptSet.groups) {
+    for (const prompt of group.prompts) {
+      total++;
+      const engines = {};
+      let app = false, lnk = false;
+      for (const e of mock.ENGINES) {
+        const cell = mock.promptAppearance(client, prompt.text, e, week);
+        cell.competitors = {};
+        for (const d of competitors) {
+          const ca = mock.competitorAppearance(client, d, prompt.text, e, week);
+          cell.competitors[d] = ca;
+          if (ca) eng[e].competitorCells++;
+        }
+        engines[e] = cell;
+        if (cell.appeared) { app = true; eng[e].appeared++; eng[e].clientCells++; }
+        if (cell.linked) { lnk = true; eng[e].linked++; }
+      }
+      if (app) appearedPrompts++;
+      if (lnk) linkedPrompts++;
+      rows.push({
+        promptId: prompt.id, prompt: prompt.text,
+        stage: prompt.stage || null, intent: group.intent, engines
+      });
+    }
+  }
+
+  const scorecard = {
+    visibility: total ? appearedPrompts / total : 0,
+    linkRate: appearedPrompts ? linkedPrompts / appearedPrompts : 0,
+    perEngine: {}
+  };
+  const shareOfVoice = { overall: 0, perEngine: {} };
+  let clientCells = 0, competitorCells = 0;
+  for (const e of mock.ENGINES) {
+    scorecard.perEngine[e] = {
+      visibility: total ? eng[e].appeared / total : 0,
+      linkRate: eng[e].appeared ? eng[e].linked / eng[e].appeared : 0
+    };
+    const denom = eng[e].clientCells + eng[e].competitorCells;
+    shareOfVoice.perEngine[e] = denom ? eng[e].clientCells / denom : 0;
+    clientCells += eng[e].clientCells;
+    competitorCells += eng[e].competitorCells;
+  }
+  shareOfVoice.overall = (clientCells + competitorCells) ? clientCells / (clientCells + competitorCells) : 0;
+
+  return { week, capturedAt: now(), scorecard, shareOfVoice, rows };
 }
 
 // ---- Agent 1: Research -------------------------------------------------------
@@ -1339,10 +1504,12 @@ function monitor(client) {
   const keywords = client.plan.prioritizedArticles.map(k =>
     mock.gscKeywordData(client.id, k.keyword, run));
   const firstSlug = [...published].sort((a, b) => a.slug.localeCompare(b.slug))[0].slug;
+  // hash basis is the DOMAIN, not the random client id — SPEC §8 promises
+  // reproducible runs, and the decay watchlist (v1.3) depends on it
   const citations = published.map(a => {
     const engines = {};
     for (const e of mock.ENGINES) {
-      engines[e] = mock.citationCheck(client.id, a.slug, e, run, a.slug === firstSlug);
+      engines[e] = mock.citationCheck(client.domain, a.slug, e, run, a.slug === firstSlug);
     }
     return { articleId: a.id, slug: a.slug, title: a.title, engines };
   });
@@ -1413,6 +1580,26 @@ function monitor(client) {
   const promptTracking = client.promptSet && client.promptSet.status === 'approved'
     ? trackPrompts(client, run) : null;
 
+  // Decay watchlist (v1.3 item 6 — scoring only, no refresh execution).
+  // Multi-observation discipline: an article enters the watchlist only when it
+  // is below the threshold in this report AND the previous one.
+  const decayThreshold = client.thresholds.decayThreshold != null ? client.thresholds.decayThreshold : 55;
+  const decayScores = published.map(a => {
+    const row = citations.find(r => r.articleId === a.id);
+    const scored = decayScore(client, a, { run, citationRow: row, prevReport: prev, keywords, visitors });
+    return { articleId: a.id, slug: a.slug, ...scored };
+  });
+  const watchlist = [];
+  const prevDecay = prev && prev.decay ? prev.decay.scores : null;
+  if (prevDecay) {
+    for (const s of decayScores) {
+      const p = prevDecay.find(x => x.articleId === s.articleId);
+      if (p && s.health < decayThreshold && p.health < decayThreshold) {
+        watchlist.push({ ...s, trend: s.health < p.health ? 'down' : 'flat' });
+      }
+    }
+  }
+
   const report = {
     id: uid('rep'),
     week: run,
@@ -1427,6 +1614,7 @@ function monitor(client) {
     botVisits: mock.botVisits(client.id, run),
     droppedPages,
     newGaps: mock.impressionGaps(client.niche, run, langOf(client)),
+    decay: { threshold: decayThreshold, scores: decayScores, watchlist },
     ...(promptTracking ? { promptTracking } : {})
   };
   client.reports.push(report);
@@ -1437,12 +1625,79 @@ function monitor(client) {
       `mention rate ${Math.round(promptTracking.weekly.mentionRate * 100)}%, citation rate ${Math.round(promptTracking.weekly.citationRate * 100)}% ` +
       `(rolling ${promptTracking.rolling.weeks.length}-week avg ${Math.round(promptTracking.rolling.citationRate * 100)}%).`
     : '';
+  const decayBit = watchlist.length
+    ? ` Decay watchlist: ${watchlist.length} page(s) below health ${decayThreshold} on two consecutive reports — queued for the next refresh cycle.`
+    : '';
   return {
     agent: 'monitor', status: 'NEEDS_REVIEW',
     summary: `Weekly report #${run}: ${citedCount}/${citations.length * mock.ENGINES.length} engine citations, ` +
       `${droppedPages.length} dropped pages flagged, ${whitespace.length} whitespace queries (nobody cited), ` +
-      `${report.newGaps.length} new gaps, ${newNotifications.length} traffic-threshold notifications.${ptBit} Pending specialist review.`
+      `${report.newGaps.length} new gaps, ${newNotifications.length} traffic-threshold notifications.${ptBit}${decayBit} Pending specialist review.`
   };
+}
+
+// ---- Decay scoring (v1.3 item 6 — v5 §1.1, weights ours) -----------------------
+// 0–100 health per published article. Every non-zero penalty is a named factor
+// so the watchlist explains itself. Scoring only — refresh execution stays out
+// of scope until real publishing is proven on Sami's test domains.
+function decayScore(client, article, ctx) {
+  const factors = [];
+  let health = 100;
+  const pen = (points, factor, detail) => {
+    if (points <= 0) return;
+    health -= points;
+    factors.push({ factor, detail, penalty: points });
+  };
+
+  // 1. Citation status: engines currently not citing the article, and
+  //    engines lost since the previous report (drop = the strongest signal).
+  const row = ctx.citationRow;
+  const uncited = mock.ENGINES.filter(e => !row.engines[e]);
+  pen(uncited.length * 14, 'citation-status', uncited.length ? `uncited on ${uncited.join(', ')}` : '');
+  const prevRow = ctx.prevReport && ctx.prevReport.citations.find(r => r.articleId === article.id);
+  if (prevRow) {
+    const lost = mock.ENGINES.filter(e => prevRow.engines[e] && !row.engines[e]);
+    pen(lost.length * 15, 'citation-loss', `lost ${lost.join(', ')} since report #${ctx.prevReport.week}`);
+  }
+
+  // 2. Ranking movement vs the previous report.
+  const kwNow = ctx.keywords.find(k => k.keyword === article.keyword);
+  const kwPrev = ctx.prevReport && ctx.prevReport.keywords.find(k => k.keyword === article.keyword);
+  if (kwNow && kwPrev && kwNow.position > kwPrev.position) {
+    pen(Math.min((kwNow.position - kwPrev.position) * 2, 15), 'ranking-movement',
+      `position ${kwPrev.position} → ${kwNow.position}`);
+  }
+
+  // 3. Traffic trend over the rolling window.
+  const visNow = ctx.visitors.find(v => v.articleId === article.id);
+  const visPrev = ctx.prevReport && (ctx.prevReport.visitors || []).find(v => v.articleId === article.id);
+  if (visNow && visPrev && visNow.visitors < visPrev.visitors) {
+    pen(10, 'traffic-trend', `${visPrev.visitors} → ${visNow.visitors} weekly visitors`);
+  }
+
+  // 4. Age since the last meaningful edit, measured in report cycles.
+  const editedAt = article.optimizedAt || article.publishedAt;
+  const cyclesSince = (client.reports || []).filter(r => r.createdAt > editedAt).length;
+  pen(Math.min(cyclesSince * 5, 20), 'content-age', `${cyclesSince} report cycle(s) since last meaningful edit`);
+
+  // 5. Factual staleness: facts older than last year.
+  const staleBefore = new Date().getFullYear() - 1;
+  const stale = (article.facts || []).filter(f => f.year && f.year < staleBefore).length;
+  if (stale) pen(Math.min(stale * 4, 12), 'factual-staleness', `${stale} fact(s) dated before ${staleBefore}`);
+
+  // 6. Competitive displacement: a competitor is now cited on the article's
+  //    query on engines where the article itself is not.
+  const displaced = mock.ENGINES.filter(e => {
+    if (row.engines[e]) return false;
+    const owner = mock.queryCitationOwner(client, article.keyword, e, ctx.run);
+    return owner && owner !== 'client';
+  });
+  if (displaced.length) {
+    pen(Math.min(displaced.length * 5, 15), 'competitive-displacement',
+      `competitor cited on ${displaced.join(', ')}`);
+  }
+
+  return { health: Math.max(0, Math.round(health)), factors };
 }
 
 // Prompt tracking aggregation for one monitor run (SPEC §10.3). Every prompt ×
@@ -1480,10 +1735,22 @@ function trackPrompts(client, run) {
   };
   const prev = client.reports.filter(r => r.promptTracking).slice(-3);
   const windowRates = prev.map(r => r.promptTracking.weekly).concat([weekly]);
+
+  // v1.3 item 2: the client-facing prompt-level scorecard — Visibility and
+  // Link Rate — plus the full appearance snapshot for the visibility screen.
+  const appearance = appearanceSnapshot(client, run);
+  const scorecard = appearance.scorecard;
+  const prevScorecards = prev.map(r => r.promptTracking.scorecard).filter(Boolean);
+  const scWindow = prevScorecards.concat([scorecard]);
+
   const rolling = {
     weeks: prev.map(r => r.week).concat([run]),
+    // internal volatility metrics (run-based)
     mentionRate: windowRates.reduce((s, w) => s + w.mentionRate, 0) / windowRates.length,
-    citationRate: windowRates.reduce((s, w) => s + w.citationRate, 0) / windowRates.length
+    citationRate: windowRates.reduce((s, w) => s + w.citationRate, 0) / windowRates.length,
+    // client-facing rolling averages
+    visibility: scWindow.reduce((s, w) => s + w.visibility, 0) / scWindow.length,
+    linkRate: scWindow.reduce((s, w) => s + w.linkRate, 0) / scWindow.length
   };
   // Baseline anchor: the share of baseline query × engine cells where the
   // client was already cited before the engagement (Agent 0).
@@ -1495,6 +1762,16 @@ function trackPrompts(client, run) {
     }
     baseline = { citationRate: bCells ? bCited / bCells : 0, queries: client.baseline.queries.length };
   }
+  // Frozen week-0 anchor for the client-facing metrics (v1.3 items 1+4):
+  // captured once at prompt-set approval, never recomputed.
+  const baselineScorecard = client.baseline && client.baseline.promptRun
+    ? {
+        visibility: client.baseline.promptRun.scorecard.visibility,
+        linkRate: client.baseline.promptRun.scorecard.linkRate,
+        shareOfVoice: client.baseline.promptRun.shareOfVoice.overall
+      }
+    : null;
+
   return {
     promptSetId: client.promptSet.id,
     promptCount: client.promptSet.total,
@@ -1502,6 +1779,10 @@ function trackPrompts(client, run) {
     weekly,
     rolling,
     baseline,
+    baselineScorecard,
+    scorecard,
+    shareOfVoice: appearance.shareOfVoice,
+    appearance,
     byIntent: [...byIntentAcc.entries()].map(([intent, a]) => ({
       intent, prompts: a.prompts, mentionRate: a.m / a.n, citationRate: a.c / a.n
     })),
@@ -1571,7 +1852,11 @@ function optimize(client) {
   };
 }
 
-module.exports = { baseline, research, brief, writer, scoreArticle, contradictionCheck, publish, monitor, optimize, RUBRIC_WEIGHTS };
+module.exports = {
+  baseline, research, brief, writer, scoreArticle, contradictionCheck,
+  publish, monitor, optimize, RUBRIC_WEIGHTS,
+  appearanceSnapshot, decayScore
+};
 
 });
 
@@ -1591,7 +1876,8 @@ const DEFAULT_THRESHOLDS = {
   maxWriterAttempts: 3,  // rewrites before ESCALATE_TO_HUMAN
   dropSensitivity: 5,    // ranking positions lost before a page is flagged
   visitorThreshold: 5,   // visitors that trigger a visibility notification
-  visitorWindowDays: 7   // window for the visitor threshold
+  visitorWindowDays: 7,  // window for the visitor threshold
+  decayThreshold: 55     // health below this on 2 consecutive reports → watchlist (v1.3)
 };
 
 function audit(client, agent, status, summary, detail) {
@@ -1648,6 +1934,7 @@ function createClient(store, input) {
     id: uid('client'),
     apiKey: uid('key'),
     reportToken: uid('rt'),   // shareable-link secret for the web report
+    portalToken: uid('pt'),   // client-portal secret (v1.3 — scoped read-only dashboard)
     name: input.name,
     domain: input.domain,
     niche: input.niche,
@@ -1663,6 +1950,7 @@ function createClient(store, input) {
     profile,
     promptSet: null,
     baseline: null,
+    snapshots: [],            // dated re-audit snapshots; the baseline itself is frozen (v1.3)
     plan: null,
     briefs: [],
     articles: [],
@@ -1904,6 +2192,16 @@ function promptSetDecision(store, clientId, decision) {
   if (!['approve', 'reject'].includes(decision)) { const e = new Error('decision must be approve|reject'); e.status = 400; throw e; }
   client.promptSet.status = decision === 'approve' ? 'approved' : 'rejected';
   if (decision === 'approve') client.promptSet.approvedAt = now();
+  // v1.3 item 4: the week-0 prompt appearance snapshot is captured exactly
+  // once, at the moment the set is approved, into the FROZEN baseline. The
+  // weekly monitor produces current data; this anchor never moves.
+  if (decision === 'approve' && client.baseline && !client.baseline.promptRun) {
+    client.baseline.promptRun = agents.appearanceSnapshot(client, 0);
+    audit(client, 'system', 'INFO',
+      `Week-0 prompt appearance snapshot captured into the frozen baseline ` +
+      `(Visibility ${Math.round(client.baseline.promptRun.scorecard.visibility * 100)}%, ` +
+      `Link Rate ${Math.round(client.baseline.promptRun.scorecard.linkRate * 100)}%).`);
+  }
   audit(client, 'human', 'INFO', decision === 'approve'
     ? `Specialist approved prompt set v${client.promptSet.version} (${client.promptSet.total} prompts). ` +
       'Now the weekly tracking basis and visible read-only to the client.'
@@ -2026,23 +2324,86 @@ function updateSettings(store, clientId, input) {
   return client;
 }
 
+// One-time backfill for clients created before v1.3 (runs at server start and
+// demo-shim load). Purely additive: portal token, snapshots array, decay
+// threshold, prompt stage/persona/region, and the frozen GSC block — the GSC
+// mock is deterministic per client, so backfilling equals what onboarding
+// would have captured.
+function migrateClients(store) {
+  let touched = false;
+  for (const c of store.clients()) {
+    if (!c.portalToken) { c.portalToken = uid('pt'); touched = true; }
+    if (!Array.isArray(c.snapshots)) { c.snapshots = []; touched = true; }
+    if (c.thresholds && c.thresholds.decayThreshold == null) {
+      c.thresholds.decayThreshold = DEFAULT_THRESHOLDS.decayThreshold; touched = true;
+    }
+    if (c.baseline && !c.baseline.gsc) { c.baseline.gsc = mock.gscBaseline(c); touched = true; }
+    if (c.promptSet) {
+      for (const g of c.promptSet.groups) {
+        for (const p of g.prompts) {
+          if (!p.stage) {
+            p.stage = mock.STAGE_OF_INTENT[g.intent] || 'awareness';
+            if (p.persona === undefined) p.persona = null;
+            if (p.region === undefined) p.region = null;
+            touched = true;
+          }
+        }
+      }
+    }
+  }
+  if (touched) store.save();
+}
+
 module.exports = {
   STAGES, DEFAULT_THRESHOLDS, createClient, runStage,
   profileDecision, promptSetDecision,
   planDecision, articleDecision, visibilityDecision, publishConfirmation,
-  reportDecision, resolveEscalation, updateSettings
+  reportDecision, resolveEscalation, updateSettings, migrateClients
 };
+
+});
+
+__define('brand', function (module, exports, require) {
+'use strict';
+// White-label groundwork (v1.3 item 5 / v5 §5.2): the ONE place the brand
+// identity lives. The web report and the client portal read it; swapping the
+// brand for a white-label partner means overriding AUREVA_BRAND (JSON) — no
+// code changes anywhere else.
+const DEFAULT_BRAND = {
+  name: 'AUREVA',
+  accentColor: '#0f6f5c',
+  logoText: 'AUREVA'
+};
+
+function getBrand() {
+  const env = typeof process !== 'undefined' && process.env && process.env.AUREVA_BRAND;
+  if (!env) return { ...DEFAULT_BRAND };
+  try {
+    return { ...DEFAULT_BRAND, ...JSON.parse(env) };
+  } catch {
+    return { ...DEFAULT_BRAND };
+  }
+}
+
+module.exports = { getBrand, DEFAULT_BRAND };
 
 });
 
 __define('report', function (module, exports, require) {
 'use strict';
-// Weekly web report (SPEC §10.4): standalone shareable HTML — token-gated,
+// Weekly web report (SPEC §10.4 + §11): standalone shareable HTML — token-gated,
 // printable to PDF, and anonymisable for sales calls (demo mode swaps the
 // client identity while every metric stays real). Structure is Ole's;
 // all client-facing prose is placeholder copy that Sami owns.
-const ENGINES = ['chatgpt', 'gemini', 'perplexity', 'google_ai_overview'];
-const ENGINE_LABEL = { chatgpt: 'ChatGPT', gemini: 'Gemini', perplexity: 'Perplexity', google_ai_overview: 'Google AI Overview' };
+//
+// v1.3 naming migration (§11.2): the client-facing metrics are Visibility
+// (share of tracked prompts where the brand appears) and Link Rate (share of
+// those appearances that include a link). Run-based mention/citation rates are
+// internal volatility metrics and never appear here.
+const { getBrand } = require('./brand');
+
+const ENGINES = ['chatgpt', 'gemini', 'perplexity', 'google_ai_overview', 'claude'];
+const ENGINE_LABEL = { chatgpt: 'ChatGPT', gemini: 'Gemini', perplexity: 'Perplexity', google_ai_overview: 'Google AI Overview', claude: 'Claude' };
 
 function esc(s) { return String(s ?? '').replace(/[&<>"]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m])); }
 function pct(x) { return `${(x * 100).toFixed(0)}%`; }
@@ -2082,33 +2443,50 @@ function statTile(label, value, sub) {
     (sub ? `<div class="tile-sub">${esc(sub)}</div>` : '') + '</div>';
 }
 
+// Appearance cell for the prompt-level table: ✓ (+⛓ when linked, with the
+// position in the answer), or who appears instead.
+function appearanceCell(cell, id) {
+  if (!cell) return '<td class="nobody">—</td>';
+  if (cell.appeared) {
+    return `<td class="yes">✓${cell.linked ? ' ⛓' : ''}${cell.position ? ` #${cell.position}` : ''}</td>`;
+  }
+  if (cell.insteadOf) return `<td class="no">${esc(id.competitor(cell.insteadOf))}</td>`;
+  return '<td class="nobody">nobody</td>';
+}
+
 function renderReport(client, report, opts = {}) {
   const demo = !!opts.demo;
+  const brand = opts.brand || getBrand();
   const id = identityFor(client, demo);
   const pt = report.promptTracking || null;
+  const sc = pt && pt.scorecard ? pt.scorecard : null;
   const lang = client.profile && client.profile.primaryLanguage === 'nl' ? 'nl' : 'en';
 
-  const tiles = pt ? [
-    statTile('Mention rate (this week)', pct(pt.weekly.mentionRate),
-      `brand named in the answer · ${pt.promptCount} prompts × ${ENGINES.length} engines × ${pt.runsPerPrompt} runs`),
-    statTile('Citation rate (this week)', pct(pt.weekly.citationRate),
-      'site used as a source — the metric that matters'),
-    statTile(`Rolling ${pt.rolling.weeks.length}-week average`, pct(pt.rolling.citationRate),
-      `citation rate, weeks ${pt.rolling.weeks.join(' · ')}`),
-    statTile('Baseline → now', `${pct(pt.baseline.citationRate)} → ${pct(pt.rolling.citationRate)}`,
-      'citation rate before the engagement vs the rolling average')
+  const tiles = sc ? [
+    statTile('Visibility (this week)', pct(sc.visibility),
+      `share of ${pt.promptCount} tracked prompts where the brand appears`),
+    statTile('Link Rate (this week)', pct(sc.linkRate),
+      'share of appearances that link to the site — the metric that matters'),
+    statTile(`Rolling ${pt.rolling.weeks.length}-week average`, pct(pt.rolling.visibility),
+      `Visibility, weeks ${pt.rolling.weeks.join(' · ')}`),
+    statTile('Baseline → now',
+      `${pt.baselineScorecard ? pct(pt.baselineScorecard.visibility) : '—'} → ${pct(pt.rolling.visibility)}`,
+      'Visibility frozen at onboarding vs the rolling average'),
+    ...(pt.shareOfVoice ? [statTile('Share of Voice', pct(pt.shareOfVoice.overall),
+      'brand appearances ÷ all appearances across the competitor set')] : [])
   ].join('') : '';
 
-  const intentRows = pt ? pt.byIntent.map(g =>
-    `<tr><td>${esc(g.intent)}</td><td>${g.prompts}</td><td>${pct(g.mentionRate)}</td><td>${pct(g.citationRate)}</td></tr>`).join('') : '';
+  const engineRows = sc ? ENGINES.map(e =>
+    `<tr><td>${ENGINE_LABEL[e]}</td><td>${pct(sc.perEngine[e].visibility)}</td>` +
+    `<td>${pct(sc.perEngine[e].linkRate)}</td>` +
+    `<td>${pt.shareOfVoice ? pct(pt.shareOfVoice.perEngine[e]) : '—'}</td></tr>`).join('') : '';
 
-  const topPrompts = pt ? [...pt.results]
-    .map(r => ({ ...r, avgCite: ENGINES.reduce((s, e) => s + r.engines[e].citationRate, 0) / ENGINES.length }))
-    .sort((a, b) => b.avgCite - a.avgCite)
-    .slice(0, 10) : [];
-  const promptRows = topPrompts.map(r =>
-    `<tr><td>${esc(r.prompt)}</td><td class="dim">${esc(r.intent)}</td>${ENGINES.map(e =>
-      `<td>${pct(r.engines[e].citationRate)}</td>`).join('')}</tr>`).join('');
+  const appearanceRows = pt && pt.appearance ? [...pt.appearance.rows]
+    .map(r => ({ ...r, appearedOn: ENGINES.filter(e => r.engines[e] && r.engines[e].appeared).length }))
+    .sort((a, b) => b.appearedOn - a.appearedOn)
+    .slice(0, 10)
+    .map(r => `<tr><td>${esc(r.prompt)}</td><td class="dim">${esc(r.stage || '')}</td>` +
+      `${ENGINES.map(e => appearanceCell(r.engines[e], id)).join('')}</tr>`).join('') : '';
 
   const queryRows = (report.queryCitations || []).slice(0, 8).map(row =>
     `<tr><td>${esc(row.query)}</td>${ENGINES.map(e => ownerCell(row.engines[e], id)).join('')}</tr>`).join('');
@@ -2116,13 +2494,18 @@ function renderReport(client, report, opts = {}) {
   const kwRows = (report.keywords || []).slice(0, 8).map(k =>
     `<tr><td>${esc(k.keyword)}</td><td>${k.impressions}</td><td>${k.clicks}</td><td>${k.position}</td></tr>`).join('');
 
+  const decay = report.decay || null;
+  const decayRows = decay && decay.watchlist.length ? decay.watchlist.map(w =>
+    `<tr><td>${esc(w.slug)}</td><td>${w.health}/100</td><td class="dim">${esc(w.trend)}</td>` +
+    `<td class="dim">${w.factors.map(f => esc(f.factor)).join(', ')}</td></tr>`).join('') : '';
+
   return `<!doctype html><html lang="${lang}"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <title>AI visibility report #${report.week} — ${esc(id.name)}</title>
 <style>
-:root { --ink:#1c2430; --dim:#68758a; --line:#dde3ec; --accent:#0f6f5c; --warn:#a15c07; --bg:#f6f8fb; }
+:root { --ink:#1c2430; --dim:#68758a; --line:#dde3ec; --accent:${esc(brand.accentColor)}; --warn:#a15c07; --bg:#f6f8fb; }
 * { box-sizing: border-box; }
 body { font: 15px/1.55 -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); background: var(--bg); margin: 0; }
 .page { max-width: 880px; margin: 0 auto; padding: 32px 24px 64px; }
@@ -2156,7 +2539,7 @@ td.nobody { color: var(--dim); font-style: italic; }
 </style></head><body><div class="page">
 <header>
   <div>
-    <div class="brandmark">AUREVA</div>
+    <div class="brandmark">${esc(brand.logoText)}</div>
     <h1>AI search visibility — weekly report #${report.week}</h1>
     <p class="dim" style="margin:0">${esc(id.name)} · ${esc(id.domain)} · ${esc(report.createdAt.slice(0, 10))}
     ${demo ? ' · <span class="demo-flag">ANONYMISED DEMO — real metrics, identity withheld</span>' : ''}</p>
@@ -2164,24 +2547,25 @@ td.nobody { color: var(--dim); font-style: italic; }
   <button class="printbtn" onclick="window.print()">Print / save as PDF</button>
 </header>
 
-<div class="placeholder">[Placeholder intro copy — final client-facing prose is owned and written by Aureva.
+<div class="placeholder">[Placeholder intro copy — final client-facing prose is owned and written by ${esc(brand.name)}.
 This section will summarise the week in one paragraph for the client.]</div>
 
-${pt ? `
+${sc ? `
 <div class="tiles">${tiles}</div>
 
 <div class="note"><strong>How to read this:</strong> every prompt is checked ${pt.runsPerPrompt} times per engine
-each week because AI answers vary run to run. <strong>Mention rate</strong> counts the brand being named;
-<strong>citation rate</strong> counts the site being used as a source. Weekly numbers swing — 40–60% monthly
-citation volatility (drift) is normal in AI search — so trend decisions are made on the
-<strong>${pt.rolling.weeks.length}-week rolling average</strong>, never on a single week.</div>
+each week because AI answers vary run to run. <strong>Visibility</strong> is the share of tracked prompts where
+the brand appears in the answer; <strong>Link Rate</strong> is the share of those appearances that link to the
+site. Weekly numbers swing — 40–60% monthly volatility (drift) is normal in AI search — so trend decisions are
+made on the <strong>${pt.rolling.weeks.length}-week rolling average</strong>, never on a single week.</div>
 
-<h2>Visibility by prompt intent</h2>
-<table><tr><th>Intent</th><th>Prompts</th><th>Mention rate</th><th>Citation rate</th></tr>${intentRows}</table>
+<h2>Visibility by engine</h2>
+<table><tr><th>Engine</th><th>Visibility</th><th>Link Rate</th><th>Share of Voice</th></tr>${engineRows}</table>
 
-<h2>Top prompts by citation rate</h2>
-<table><tr><th>Prompt</th><th>Intent</th>${ENGINES.map(e => `<th>${ENGINE_LABEL[e]}</th>`).join('')}</tr>${promptRows}</table>
-<p class="dim small">Showing 10 of ${pt.promptCount} tracked prompts (approved prompt set, shown to the client at onboarding).</p>
+<h2>Where the brand appears — top prompts</h2>
+<table><tr><th>Prompt</th><th>Stage</th>${ENGINES.map(e => `<th>${ENGINE_LABEL[e]}</th>`).join('')}</tr>${appearanceRows}</table>
+<p class="dim small">✓ = brand appears · ⛓ = appearance links to the site · #n = position in the answer ·
+a competitor name = who appears instead · “nobody” = whitespace. Showing 10 of ${pt.promptCount} tracked prompts.</p>
 ` : `
 <div class="note">Prompt tracking starts once the prompt set is approved. This report covers search
 performance and per-article citations only.</div>
@@ -2191,14 +2575,20 @@ performance and per-article citations only.</div>
 <table><tr><th>Query</th>${ENGINES.map(e => `<th>${ENGINE_LABEL[e]}</th>`).join('')}</tr>${queryRows}</table>
 <p class="dim small">“nobody” = citation whitespace — the cheapest wins; these queries are fed straight back into the content plan.</p>
 
+${decay && decay.watchlist.length ? `
+<h2>Decay watchlist — queued for the next refresh cycle</h2>
+<table><tr><th>Page</th><th>Health</th><th>Trend</th><th>Factors</th></tr>${decayRows}</table>
+<p class="dim small">Pages below health ${decay.threshold}/100 on two consecutive reports. Nothing enters this list
+on a single observation.</p>` : ''}
+
 <h2>Search performance (Google Search Console)</h2>
 <table><tr><th>Keyword</th><th>Impressions</th><th>Clicks</th><th>Position</th></tr>${kwRows}</table>
 
 <h2>Traffic (GA4)</h2>
 <p class="dim">Organic sessions: ${report.ga4.organicSessions} · Engagement rate: ${report.ga4.engagementRate} · Conversions: ${report.ga4.conversions}</p>
 
-<div class="placeholder">[Placeholder closing copy — next steps and recommendations, written by Aureva.]</div>
-<p class="dim small">Generated by the Aureva pipeline · report #${report.week} · baseline recorded before engagement start.</p>
+<div class="placeholder">[Placeholder closing copy — next steps and recommendations, written by ${esc(brand.name)}.]</div>
+<p class="dim small">Generated by the ${esc(brand.name)} pipeline · report #${report.week} · baseline recorded before engagement start.</p>
 </div></body></html>`;
 }
 
@@ -2231,6 +2621,9 @@ function demoReset() {
   localStorage.removeItem(__DEMO_KEY);
   location.reload();
 }
+
+// v1.3 backfill for demo databases persisted by an older bundle version.
+__orch.migrateClients(__store);
 
 // ---- router mirroring src/server.js ----------------------------------------
 
@@ -2450,10 +2843,11 @@ __seed();
 'use strict';
 /* Aureva operator console — vanilla JS, no build step. */
 
-const state = { clients: [], selId: null, tab: 'pipeline', view: 'client' };
+const state = { clients: [], selId: null, tab: 'pipeline', view: 'client', heatmapEngine: 'chatgpt', authed: true };
 const $ = (s) => document.querySelector(s);
-const ENGINES = ['chatgpt', 'gemini', 'perplexity', 'google_ai_overview'];
-const ENGINE_LABEL = { chatgpt: 'ChatGPT', gemini: 'Gemini', perplexity: 'Perplexity', google_ai_overview: 'Google AI Overview' };
+const ENGINES = ['chatgpt', 'gemini', 'perplexity', 'google_ai_overview', 'claude'];
+const ENGINE_LABEL = { chatgpt: 'ChatGPT', gemini: 'Gemini', perplexity: 'Perplexity', google_ai_overview: 'Google AI Overview', claude: 'Claude' };
+const IS_DEMO = typeof window.demoReset === 'function'; // demo.html bundles the shim; no auth there
 
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m])); }
 function badge(v) { return `<span class="badge b-${esc(v)}" data-testid="badge-${esc(v)}">${esc(String(v).replace(/_/g, ' '))}</span>`; }
@@ -2465,7 +2859,11 @@ async function api(method, path, body) {
     body: body ? JSON.stringify(body) : undefined
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json.error || res.statusText);
+  if (!res.ok) {
+    const err = new Error(json.error || res.statusText);
+    err.status = res.status;
+    throw err;
+  }
   return json;
 }
 
@@ -2480,10 +2878,47 @@ function toast(msg, status) {
 function sel() { return state.clients.find(c => c.id === state.selId) || null; }
 
 async function refresh() {
-  state.clients = await api('GET', '/api/clients');
+  try {
+    state.clients = await api('GET', '/api/clients');
+    state.authed = true;
+  } catch (e) {
+    if (e.status === 401) { state.authed = false; return renderLogin(); }
+    throw e;
+  }
   if (!state.selId && state.clients.length) state.selId = state.clients[0].id;
   render();
 }
+
+// ---------- staff login (v1.3 — server mode only; demo.html bypasses auth) ----------
+
+function renderLogin() {
+  $('#client-list').innerHTML = '';
+  $('#content').innerHTML = `
+    <h1>Staff login</h1>
+    <p class="dim">The operator console requires an Aureva staff session. Clients use their portal link instead.</p>
+    <form class="panel" onsubmit="return submitLogin(event)" style="margin-top:14px;max-width:360px">
+      <label>Staff password</label>
+      <input type="password" name="password" data-testid="login-password" autofocus required>
+      <p style="margin-top:14px"><button class="primary" type="submit" data-testid="login-submit">Log in</button></p>
+    </form>`;
+}
+
+window.submitLogin = async (ev) => {
+  ev.preventDefault();
+  try {
+    await api('POST', '/login', { password: ev.target.password.value });
+    await refresh();
+  } catch (e) {
+    toast(e.status === 401 ? 'Wrong password.' : e.message, 'FAIL');
+  }
+  return false;
+};
+
+window.logout = async () => {
+  await api('POST', '/logout');
+  state.authed = false;
+  renderLogin();
+};
 
 // ---------- actions ----------
 
@@ -2560,7 +2995,8 @@ window.saveSettings = async (ev) => {
       maxWriterAttempts: +f.maxWriterAttempts.value,
       dropSensitivity: +f.dropSensitivity.value,
       visitorThreshold: +f.visitorThreshold.value,
-      visitorWindowDays: +f.visitorWindowDays.value
+      visitorWindowDays: +f.visitorWindowDays.value,
+      decayThreshold: +f.decayThreshold.value
     },
     reviewMode: f.reviewMode.value,
     simulateRobotsBlock: f.simulateRobotsBlock.checked,
@@ -2620,17 +3056,29 @@ window.viewReport = (rid) => {
       ${sel().reportToken ? ` · <a href="/report/${sel().id}/${r.id}?token=${esc(sel().reportToken)}" target="_blank" data-testid="report-web-link" style="color:var(--accent2)">Web report ↗</a>
       · <a href="/report/${sel().id}/${r.id}?token=${esc(sel().reportToken)}&demo=1" target="_blank" data-testid="report-demo-link" style="color:var(--accent2)">Anonymised demo ↗</a>` : ''}</p>
     ${pt ? `
-    <h2>Prompt tracking — volatility-aware (${pt.promptCount} prompts × 4 engines × ${pt.runsPerPrompt} runs)</h2>
-    <p data-testid="prompt-tracking-summary">
-      Mention rate <strong>${Math.round(pt.weekly.mentionRate * 100)}%</strong> ·
-      Citation rate <strong>${Math.round(pt.weekly.citationRate * 100)}%</strong> ·
-      Rolling ${pt.rolling.weeks.length}-week avg citation <strong>${Math.round(pt.rolling.citationRate * 100)}%</strong> ·
-      Baseline anchor ${Math.round(pt.baseline.citationRate * 100)}% → ${Math.round(pt.rolling.citationRate * 100)}%
+    <h2>Prompt tracking — volatility-aware (${pt.promptCount} prompts × ${ENGINES.length} engines × ${pt.runsPerPrompt} runs)</h2>
+    ${pt.scorecard ? `<p data-testid="scorecard-summary">
+      Client-facing scorecard: Visibility <strong>${Math.round(pt.scorecard.visibility * 100)}%</strong> ·
+      Link Rate <strong>${Math.round(pt.scorecard.linkRate * 100)}%</strong>
+      ${pt.shareOfVoice ? ` · Share of Voice <strong>${Math.round(pt.shareOfVoice.overall * 100)}%</strong>` : ''}
+      · Rolling ${pt.rolling.weeks.length}-week Visibility <strong>${Math.round((pt.rolling.visibility || 0) * 100)}%</strong>
+      ${pt.baselineScorecard ? ` · Baseline anchor ${Math.round(pt.baselineScorecard.visibility * 100)}% → ${Math.round((pt.rolling.visibility || 0) * 100)}%` : ''}
+    </p>` : ''}
+    <p data-testid="prompt-tracking-summary" class="dim">
+      Internal volatility metrics (run-based, operator-only — never client-facing):
+      mention rate <strong>${Math.round(pt.weekly.mentionRate * 100)}%</strong> ·
+      citation rate <strong>${Math.round(pt.weekly.citationRate * 100)}%</strong> ·
+      rolling ${pt.rolling.weeks.length}-week avg citation <strong>${Math.round(pt.rolling.citationRate * 100)}%</strong> ·
+      baseline anchor ${Math.round(pt.baseline.citationRate * 100)}% → ${Math.round(pt.rolling.citationRate * 100)}%
     </p>
     <p class="dim">Weekly numbers swing (40–60% monthly drift is normal) — decisions run on the rolling average, never a single week.</p>
-    <table data-testid="intent-breakdown"><tr><th>Intent</th><th>Prompts</th><th>Mention rate</th><th>Citation rate</th></tr>
+    <table data-testid="intent-breakdown"><tr><th>Intent</th><th>Prompts</th><th>Mention rate (int.)</th><th>Citation rate (int.)</th></tr>
     ${pt.byIntent.map(g => `<tr><td>${esc(g.intent)}</td><td>${g.prompts}</td><td>${Math.round(g.mentionRate * 100)}%</td><td>${Math.round(g.citationRate * 100)}%</td></tr>`).join('')}
     </table>` : ''}
+    ${r.decay && r.decay.watchlist.length ? `
+    <h2>Decay watchlist (${r.decay.watchlist.length}) — queued for next refresh cycle</h2>
+    ${r.decay.watchlist.map(w => `<p data-testid="decay-watchlist-entry">📉 <span class="mono">${esc(w.slug)}</span> — health ${w.health}/100 (${esc(w.trend)}):
+      ${w.factors.map(f => esc(f.factor)).join(', ')}</p>`).join('')}` : ''}
     <h2>Keywords (Search Console)</h2>
     <table><tr><th>Keyword</th><th>Impressions</th><th>Clicks</th><th>Position</th></tr>
     ${r.keywords.slice(0, 8).map(k => `<tr><td>${esc(k.keyword)}</td><td>${k.impressions}</td><td>${k.clicks}</td><td>${k.position}</td></tr>`).join('')}
@@ -2675,7 +3123,7 @@ function render() {
   const c = sel();
   if (!c) return;
 
-  const tabs = ['pipeline', 'profile', 'baseline', 'plan', 'content', 'publishing', 'monitoring', 'escalations', 'audit', 'settings'];
+  const tabs = ['pipeline', 'profile', 'baseline', 'visibility', 'plan', 'content', 'publishing', 'monitoring', 'escalations', 'audit', 'settings'];
   const openEsc = c.escalations.filter(e => e.status === 'open').length;
   const pendingNotif = c.notifications ? c.notifications.filter(n => n.status === 'pending').length : 0;
   const profilePending = (c.profile && c.profile.status === 'pending_approval' ? 1 : 0) +
@@ -2687,7 +3135,9 @@ function render() {
   };
   $('#content').innerHTML = `
     <h1 data-testid="client-name">${esc(c.name)}</h1>
-    <p class="dim">${esc(c.domain)} · ${esc(c.niche)} · ${c.reviewMode === 'client_review' ? 'client review mode' : 'auto-publish mode'}</p>
+    <p class="dim">${esc(c.domain)} · ${esc(c.niche)} · ${c.reviewMode === 'client_review' ? 'client review mode' : 'auto-publish mode'}
+      ${c.portalToken && !IS_DEMO ? ` · <a href="/portal/${esc(c.portalToken)}" target="_blank" data-testid="portal-link" style="color:var(--accent2)">client portal ↗</a>` : ''}
+      ${!IS_DEMO ? ` · <a href="#" data-testid="logout" onclick="logout();return false" style="color:var(--dim)">log out</a>` : ''}</p>
     <div class="tabs">${tabs.map(t =>
       `<button class="${state.tab === t ? 'sel' : ''}" data-testid="tab-${t}" onclick="setTab('${t}')">${label[t] || t}</button>`).join('')}</div>
     <div id="tab-body">${renderTab(c)}</div>`;
@@ -2740,7 +3190,8 @@ function renderOnboard() {
 
 function renderTab(c) {
   return {
-    pipeline: renderPipeline, profile: renderProfile, baseline: renderBaseline, plan: renderPlan, content: renderContent,
+    pipeline: renderPipeline, profile: renderProfile, baseline: renderBaseline, visibility: renderVisibility,
+    plan: renderPlan, content: renderContent,
     publishing: renderPublishing, monitoring: renderMonitoring,
     escalations: renderEscalations, audit: renderAudit, settings: renderSettings
   }[state.tab](c);
@@ -2786,12 +3237,16 @@ function renderProfile(c) {
         ${ps.status === 'approved' ? 'Weekly tracking basis; shown READ-ONLY to the client during onboarding (clients catch missing product lines).'
           : ps.status === 'rejected' ? 'Rejected — the next Research run regenerates it.'
           : 'Specialist approval required before any tracking starts.'}</p>
-      ${ps.groups.map(g => `
+      ${ps.groups.map(g => {
+        const stage = g.prompts[0] && g.prompts[0].stage;
+        return `
         <div class="card" style="margin-bottom:8px" data-testid="promptgroup-${esc(g.intent)}">
-          <h3>${esc(g.intent)} (${g.prompts.length})</h3>
-          ${g.prompts.slice(0, 4).map(x => `<p class="dim">“${esc(x.text)}” <span class="mono">${esc(x.language)}</span></p>`).join('')}
+          <h3>${esc(g.intent)} (${g.prompts.length})
+            ${stage ? ` <span class="badge b-${stage === 'awareness' ? 'medium' : stage === 'consideration' ? 'low' : 'high'}" data-testid="group-stage-${esc(g.intent)}">${esc(stage)}</span>` : ''}</h3>
+          ${g.prompts.slice(0, 4).map(x => `<p class="dim">“${esc(x.text)}” <span class="mono">${esc(x.language)}</span>${x.persona ? ` <span class="dim">· ${esc(x.persona)}</span>` : ''}</p>`).join('')}
           ${g.prompts.length > 4 ? `<p class="dim">… ${g.prompts.length - 4} more</p>` : ''}
-        </div>`).join('')}`}`;
+        </div>`;
+      }).join('')}`}`;
 }
 
 function count(c, status) { return c.articles.filter(a => a.status === status).length; }
@@ -2842,6 +3297,32 @@ function renderPipeline(c) {
     </p>`;
 }
 
+// Frozen baseline vs latest snapshot deltas (v1.3 item 1).
+function snapshotCompare(c) {
+  const snaps = c.snapshots || [];
+  if (!snaps.length) return '';
+  const latest = snaps[snaps.length - 1];
+  const b = c.baseline.summary, s = latest.summary;
+  const delta = (now, then, invert) => {
+    const d = now - then;
+    if (!d) return '<span class="dim">±0</span>';
+    const good = invert ? d < 0 : d > 0;
+    return `<span class="${good ? 'cite-yes' : 'cite-no'}">${d > 0 ? '+' : ''}${d}</span>`;
+  };
+  const llmsCell = (x) => x.live && x.llmsTxt ? (x.llmsTxt.present ? '✓ present' : '⚠ missing') : 'simulated';
+  return `
+    <h2>Frozen baseline vs latest snapshot (${esc(latest.createdAt.slice(0, 10))})</h2>
+    <table style="max-width:640px" data-testid="baseline-compare">
+      <tr><th></th><th>Frozen at onboarding</th><th>Latest snapshot</th><th>Δ</th></tr>
+      <tr><td>Avg citability</td><td>${b.avgCitability}/100</td><td>${s.avgCitability}/100</td><td>${delta(s.avgCitability, b.avgCitability)}</td></tr>
+      <tr><td>Orphan pages</td><td>${b.orphanPages}</td><td>${s.orphanPages}</td><td>${delta(s.orphanPages, b.orphanPages, true)}</td></tr>
+      <tr><td>Pages without schema</td><td>${b.pagesWithoutSchema}</td><td>${s.pagesWithoutSchema}</td><td>${delta(s.pagesWithoutSchema, b.pagesWithoutSchema, true)}</td></tr>
+      <tr><td>llms.txt</td><td>${llmsCell(c.baseline)}</td><td>${llmsCell(latest)}</td><td></td></tr>
+      <tr><td>robots.txt verdict</td><td>${c.baseline.robots.ok ? '✓ ok' : '⚠ blocks'}</td><td>${latest.robots.ok ? '✓ ok' : '⚠ blocks'}</td><td></td></tr>
+    </table>
+    ${snaps.length > 1 ? `<p class="dim">${snaps.length} snapshots recorded; comparing the latest against the frozen baseline.</p>` : ''}`;
+}
+
 function renderBaseline(c) {
   const b = c.baseline;
   if (!b) return '<div class="empty" data-testid="baseline-empty">No baseline audit yet — run stage 0.</div>';
@@ -2849,14 +3330,16 @@ function renderBaseline(c) {
   return `
     <div class="row">
       <h2 style="margin:0">Baseline audit — the “before” picture</h2>
+      <span class="badge b-low" data-testid="baseline-frozen">❄ frozen at onboarding</span>
       ${b.live ? '<span class="badge b-PASS" data-testid="baseline-live">● LIVE crawl</span>' : '<span class="badge b-medium">mock crawl</span>'}
       <span class="dim">${esc(b.createdAt.slice(0, 10))}</span>
-      <button data-testid="rerun-baseline" onclick="runStage('baseline')">${b.live ? 'Re-crawl + re-run' : 'Re-run'}</button>
+      <button data-testid="rerun-baseline" onclick="runStage('baseline')">${b.live ? 'Re-crawl → new snapshot' : 'Record new snapshot'}</button>
     </div>
     <p class="dim" data-testid="baseline-summary">Avg citability ${s.avgCitability}/100 · ${s.jsRenderedPages} JS-rendered · ${s.orphanPages} orphaned ·
       ${s.pagesWithoutSchema} without schema · ${s.contradictionsFound} contradictions · ${s.whitespaceQueries} whitespace queries ·
       robots.txt ${b.robots.ok ? '✓ all AI crawlers allowed' : '⚠ BLOCKS ' + b.robots.blocked.join(', ')}
       ${b.live && b.llmsTxt ? ` · llms.txt ${b.llmsTxt.present ? '✓ present' : `⚠ MISSING (HTTP ${b.llmsTxt.status})`}` : ''}</p>
+    ${snapshotCompare(c)}
     ${b.live ? `<p class="dim" data-testid="baseline-live-note">Pages, robots.txt and llms.txt above are fetched from the real site.
       Per-engine citation ownership below is still <strong>simulated</strong> until the AI-engine citation adapters are connected.
       ${(b.crawlErrors || []).length ? `⚠ Crawl notes: ${b.crawlErrors.map(esc).join(' · ')}` : ''}</p>` : ''}
@@ -2879,6 +3362,134 @@ function renderBaseline(c) {
     ${b.queries.map(row => `<tr><td>${esc(row.query)}</td>${ENGINES.map(e => ownerCell(row.engines[e])).join('')}</tr>`).join('')}
     </table>
     ${b.whitespace.length ? `<p class="dim" data-testid="baseline-whitespace">Whitespace queries (nobody cited on 2+ engines): ${b.whitespace.map(esc).join(' · ')}</p>` : ''}`;
+}
+
+// ---------- visibility tab (v1.3 item 4 — the sales instrument) ----------
+
+window.setHeatmapEngine = (e) => { state.heatmapEngine = e; render(); };
+
+function pctv(x) { return `${Math.round((x || 0) * 100)}%`; }
+
+function scoreTile(label, value, anchor, sub) {
+  return `<div class="card" style="min-width:150px">
+    <p class="num">${esc(label)}</p>
+    <h3 style="font-size:22px;color:var(--accent)">${esc(value)}</h3>
+    ${anchor ? `<p class="dim" style="min-height:0;margin:2px 0 0">${esc(anchor)}</p>` : ''}
+    ${sub ? `<p class="dim" style="min-height:0;margin:2px 0 0">${esc(sub)}</p>` : ''}
+  </div>`;
+}
+
+function appearanceCellHtml(cell) {
+  if (!cell) return '<td class="dim">—</td>';
+  if (cell.appeared) {
+    return `<td class="cite-yes" data-testid="cell-appeared">✓${cell.linked ? ' ⛓' : ''}${cell.position ? ` #${cell.position}` : ''}</td>`;
+  }
+  if (cell.insteadOf) {
+    return `<td class="cite-no" data-testid="cell-insteadof">${esc(cell.insteadOf.replace('competitor:', ''))}</td>`;
+  }
+  return '<td class="cite-nobody" data-testid="cell-nobody">◌ nobody</td>';
+}
+
+function renderVisibility(c) {
+  const ps = c.promptSet;
+  if (!ps || ps.status !== 'approved') {
+    return `<div class="empty" data-testid="visibility-empty">The visibility screen needs an approved prompt set —
+      run Research and approve the prompt set on the profile tab.</div>`;
+  }
+  const latest = [...c.reports].reverse().find(r => r.promptTracking && r.promptTracking.appearance);
+  const pt = latest ? latest.promptTracking : null;
+  const baseRun = c.baseline && c.baseline.promptRun;
+  // current data when a monitor ran; otherwise the frozen week-0 snapshot
+  const snap = pt ? pt.appearance : baseRun;
+  if (!snap) {
+    return '<div class="empty" data-testid="visibility-empty">No appearance data yet — approve the prompt set (captures week 0) or run the weekly monitor.</div>';
+  }
+  const sc = pt ? pt.scorecard : baseRun.scorecard;
+  const sov = pt ? pt.shareOfVoice : baseRun.shareOfVoice;
+  const anchor = baseRun ? baseRun.scorecard : null;
+  const competitors = (c.competitors || []).map(x => String(x).replace(/^https?:\/\//, ''));
+  const he = state.heatmapEngine;
+
+  const perEngineRows = ENGINES.map(e => `
+    <tr><td>${ENGINE_LABEL[e]}</td>
+    <td>${pctv(sc.perEngine[e].visibility)}</td>
+    <td>${pctv(sc.perEngine[e].linkRate)}</td>
+    <td>${sov ? pctv(sov.perEngine[e]) : '—'}</td></tr>`).join('');
+
+  const promptRows = snap.rows.map(r => `
+    <tr data-testid="vis-row">
+      <td>${esc(r.prompt)}</td>
+      <td><span class="badge b-${r.stage === 'awareness' ? 'medium' : r.stage === 'consideration' ? 'low' : 'high'}" data-testid="stage-badge">${esc(r.stage || '—')}</span></td>
+      ${ENGINES.map(e => appearanceCellHtml(r.engines[e])).join('')}
+    </tr>`).join('');
+
+  const heatRows = snap.rows.map(r => `
+    <tr><td>${esc(r.prompt)}</td>
+    ${appearanceCellHtml(r.engines[he]).replace('data-testid="cell-', 'data-testid="heat-client-')}
+    ${competitors.map(d => {
+      const on = r.engines[he] && r.engines[he].competitors && r.engines[he].competitors[d];
+      return `<td class="${on ? 'cite-no' : 'cite-nobody'}">${on ? '●' : '—'}</td>`;
+    }).join('')}
+    </tr>`).join('');
+
+  const gsc = c.baseline && c.baseline.gsc;
+  const cc = c.crawlCache && c.crawlCache.live ? c.crawlCache : null;
+  const base = c.baseline;
+  const schemaCov = base ? `${base.pages.filter(p => p.hasSchema).length}/${base.pages.length}` : '—';
+
+  return `
+    <div class="row" style="align-items:baseline">
+      <h2 style="margin:0">Visibility scorecard</h2>
+      <span class="dim" data-testid="vis-source">${pt
+        ? `current — weekly check #${latest.week}` : 'week-0 baseline snapshot (run the monitor for current data)'}</span>
+    </div>
+    <div class="cards" style="margin-top:8px" data-testid="vis-scorecard">
+      ${scoreTile('Visibility', pctv(sc.visibility),
+        anchor ? `baseline ${pctv(anchor.visibility)} → now ${pctv(sc.visibility)}` : '', 'share of tracked prompts where the brand appears')}
+      ${scoreTile('Link Rate', pctv(sc.linkRate),
+        anchor ? `baseline ${pctv(anchor.linkRate)} → now ${pctv(sc.linkRate)}` : '', 'appearances that link to the site')}
+      ${scoreTile('Share of Voice', sov ? pctv(sov.overall) : '—',
+        baseRun && baseRun.shareOfVoice ? `baseline ${pctv(baseRun.shareOfVoice.overall)} → now ${sov ? pctv(sov.overall) : '—'}` : '',
+        'brand vs competitor appearances')}
+    </div>
+    <table style="max-width:560px" data-testid="vis-perengine">
+      <tr><th>Engine</th><th>Visibility</th><th>Link Rate</th><th>Share of Voice</th></tr>
+      ${perEngineRows}
+    </table>
+
+    <h2>Prompt-level appearance — this table IS the product</h2>
+    <p class="dim">✓ appears · ⛓ linked · #n position in the answer · competitor name = who appears instead · ◌ nobody = whitespace.</p>
+    <table data-testid="vis-prompt-table">
+      <tr><th>Prompt</th><th>Stage</th>${ENGINES.map(e => `<th>${ENGINE_LABEL[e]}</th>`).join('')}</tr>
+      ${promptRows}
+    </table>
+
+    <h2>Competitor heatmap</h2>
+    <div class="row" style="margin-bottom:8px" data-testid="heatmap-toggle">
+      ${ENGINES.map(e => `<button class="${he === e ? 'sel primary' : ''}" data-testid="heat-engine-${e}" onclick="setHeatmapEngine('${e}')">${ENGINE_LABEL[e]}</button>`).join('')}
+    </div>
+    <table data-testid="vis-heatmap">
+      <tr><th>Prompt (${ENGINE_LABEL[he]})</th><th>${esc(c.name)}</th>${competitors.map(d => `<th>${esc(d)}</th>`).join('')}</tr>
+      ${heatRows}
+    </table>
+
+    <h2>Traditional search baseline (frozen at onboarding)</h2>
+    ${gsc ? `
+      <p class="dim" data-testid="vis-gsc-meta">${gsc.indexedPages} pages indexed at onboarding.</p>
+      <table style="max-width:560px" data-testid="vis-gsc">
+        <tr><th>Seed keyword</th><th>Impressions</th><th>Clicks</th><th>Avg position</th></tr>
+        ${gsc.keywords.map(k => `<tr><td>${esc(k.keyword)}</td><td>${k.impressions}</td><td>${k.clicks}</td><td>${k.avgPosition}</td></tr>`).join('')}
+      </table>` : '<p class="dim">Not captured at onboarding (pre-v1.3 client).</p>'}
+
+    <h2>Technical health</h2>
+    <table style="max-width:640px" data-testid="vis-tech">
+      <tr><th></th><th>Status</th></tr>
+      <tr><td>robots.txt (AI crawlers)</td><td>${base && base.robots.ok ? '<span class="cite-yes">✓ all allowed</span>' : `<span class="cite-no">⚠ blocks ${esc(base ? base.robots.blocked.join(', ') : '?')}</span>`}</td></tr>
+      <tr><td>llms.txt</td><td>${cc ? (cc.llmsTxt.present ? '<span class="cite-yes">✓ present</span>' : '<span class="cite-no">⚠ missing</span>') : '<span class="dim">simulated until live crawl</span>'}</td></tr>
+      <tr><td>Sitemap</td><td>${cc ? (cc.sitemapFound ? '<span class="cite-yes">✓ found</span>' : '<span class="cite-no">⚠ not found</span>') : '<span class="dim">simulated until live crawl</span>'}</td></tr>
+      <tr><td>Schema coverage (existing pages)</td><td>${schemaCov} pages with structured data</td></tr>
+      <tr><td>Page speed</td><td><span class="dim">placeholder — arrives with the live adapters</span></td></tr>
+    </table>`;
 }
 
 function renderPlan(c) {
@@ -2992,7 +3603,7 @@ function renderMonitoring(c) {
         return `<tr data-testid="report-row-${r.week}">
           <td>#${r.week} <span class="dim">${esc(r.createdAt.slice(0, 10))}</span></td>
           <td>${badge(r.status)}</td>
-          <td>${cited}/${r.citations.length * 4}</td>
+          <td>${cited}/${r.citations.length * ENGINES.length}</td>
           <td>${(r.whitespace || []).length}</td>
           <td>${r.droppedPages.length}</td>
           <td>${r.newGaps.length}</td>
@@ -3005,6 +3616,27 @@ function renderMonitoring(c) {
           </td></tr>`;
       }).join('')}
     </table>`}
+    ${(() => {
+      const latest = c.reports[c.reports.length - 1];
+      if (!latest || !latest.decay) return '';
+      const d = latest.decay;
+      if (!d.watchlist.length) {
+        return `<h2>Decay watchlist</h2>
+          <p class="dim" data-testid="decay-empty">Empty — pages enter only after health drops below ${d.threshold}/100 on
+          two consecutive reports (never a single observation).</p>`;
+      }
+      return `<h2>Decay watchlist (${d.watchlist.length}) — queued for next refresh cycle</h2>
+        <table data-testid="decay-table">
+          <tr><th>Page</th><th>Health</th><th>Trend</th><th>Factors</th></tr>
+          ${d.watchlist.map(w => `<tr data-testid="decay-row-${esc(w.slug)}">
+            <td class="mono">${esc(w.slug)}</td>
+            <td class="cite-no">${w.health}/100</td>
+            <td>${esc(w.trend)}</td>
+            <td class="dim">${w.factors.map(f => `${esc(f.factor)} (−${f.penalty})`).join(' · ')}</td>
+          </tr>`).join('')}
+        </table>
+        <p class="dim">Refresh execution is deliberately out of scope until real publishing is proven — this list is the queue.</p>`;
+    })()}
     ${c.optimizationLog.length ? `
       <h2>Optimization log</h2>
       ${c.optimizationLog.map(l => `<div class="card" style="margin-bottom:8px" data-testid="opt-log">
@@ -3059,6 +3691,8 @@ function renderSettings(c) {
       <input type="number" name="visitorThreshold" data-testid="set-visitorthreshold" value="${c.thresholds.visitorThreshold}" min="1" max="1000">
       <label>Visitor window (days)</label>
       <input type="number" name="visitorWindowDays" data-testid="set-visitorwindow" value="${c.thresholds.visitorWindowDays}" min="1" max="90">
+      <label>Decay watchlist threshold (health 0–100; entry needs 2 consecutive low reports)</label>
+      <input type="number" name="decayThreshold" data-testid="set-decaythreshold" value="${c.thresholds.decayThreshold ?? 55}" min="0" max="100">
       <h2>Approval gates</h2>
       <label>Content approval mode</label>
       <select name="reviewMode" data-testid="set-reviewmode">
@@ -3125,6 +3759,16 @@ refresh();
       text: 'A deep intake (company description, tone, brand rules, audiences, NL/EN, <b>regulated-industry flag</b>) is drafted into a brand profile together with a site crawl. <b>Nothing is written until a specialist approves it.</b> The Research agent then generates a 40–100 prompt set, intent-grouped, that the client sees read-only after approval.'
     },
     {
+      sel: '#tab-body',
+      pre: () => {
+        const dental = document.querySelector('[data-testid="client-link-Tandartspraktijk Elzenhof"]');
+        if (dental) dental.click();
+        window.setTab('visibility');
+      },
+      title: 'The visibility screen — this table IS the product',
+      text: 'Per prompt, per engine: does the brand <b>appear</b>, is it <b>linked</b>, at what <b>position</b> — and when absent, <b>who appears instead</b>. Above it: <b>Visibility</b>, <b>Link Rate</b> and <b>Share of Voice</b>, anchored against a frozen week-0 baseline captured when the prompt set was approved. Below: the competitor heatmap and the technical-health block.'
+    },
+    {
       sel: '[data-testid="run-full"]',
       pre: () => { window.setTab('pipeline'); },
       title: 'One click runs the whole pipeline',
@@ -3157,7 +3801,7 @@ refresh();
       sel: '#tab-body',
       pre: () => { window.setTab('monitoring'); },
       title: 'The watchtower — and the loop',
-      text: 'Weekly reports track rankings, traffic and <b>citation status per AI engine</b> (ChatGPT, Gemini, Perplexity, Google AI Overview). Prompt tracking runs every prompt <b>3× per engine</b> and separates <b>mention rate</b> from <b>citation rate</b>, with 4-week rolling averages against the pre-engagement baseline. Open <b>Web ↗</b> for the shareable client report — or <b>Demo ↗</b> for the anonymised sales version. A dropped citation flags the page; the <b>Optimizer</b> republishes and feeds gaps back to Research.'
+      text: 'Weekly reports track rankings, traffic and <b>citation status per AI engine</b> (ChatGPT, Gemini, Perplexity, Google AI Overview, <b>Claude</b>). Prompt tracking runs every prompt <b>3× per engine</b> and reports client-facing <b>Visibility</b> and <b>Link Rate</b> with 4-week rolling averages against the frozen baseline; a <b>decay watchlist</b> queues pages for the next refresh cycle after two consecutive low-health reports. Open <b>Web ↗</b> for the shareable client report — or <b>Demo ↗</b> for the anonymised sales version. A dropped citation flags the page; the <b>Optimizer</b> republishes and feeds gaps back to Research.'
     },
     {
       sel: '[data-testid="tab-escalations"]',

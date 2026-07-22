@@ -41,23 +41,46 @@ th { color: var(--dim); font-weight: 500; font-size: 12px; }
 code, .mono { font-family: ui-monospace, monospace; font-size: 13px; color: var(--accent2); }
 pre { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; overflow: auto; font-size: 13px; color: var(--text); }
 .badge { display: inline-block; padding: 1px 9px; border-radius: 10px; font-size: 11px; border: 1px solid var(--accent2); color: var(--accent2); margin-right: 6px; }
+.newtag { display: inline-block; background: var(--accent); color: #14100a; font-weight: 700; font-size: 10px; letter-spacing: .5px; padding: 1px 6px; border-radius: 5px; margin-left: 6px; vertical-align: middle; }
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 16px 0; }
+.metric { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+.metric .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--dim); }
+.metric .desc { font-size: 12px; color: var(--dim); margin-top: 4px; }
+.metric .nm { font-size: 17px; font-weight: 700; color: var(--accent); margin-top: 2px; }
 .footer { margin-top: 60px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--dim); font-size: 13px; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="kicker">AUREVA · BACKEND PIPELINE PROTOTYPE · v1.1</div>
+  <div class="kicker">AUREVA · PRODUCT BUILD · v1.3</div>
   <h1>Eight agents that take a client from onboarding to AI citations — and never stop.</h1>
-  <p class="lead">A working prototype of the full agentic SEO/GEO pipeline: baseline audit, research,
+  <p class="lead">A working build of the full agentic SEO/GEO pipeline: baseline audit, research,
   briefing, writing, quality gating, hidden-post publishing with a symmetry gate, citation and
-  whitespace monitoring, and continuous optimization — with human oversight at the points that matter
-  and a full audit trail per client.</p>
+  whitespace monitoring, and continuous optimization — now with an authenticated multi-tenant app,
+  a baseline AI-visibility screen, and a client portal. Human oversight at the points that matter,
+  a full audit trail per client, and every metric anchored to a baseline frozen at onboarding.</p>
   <a class="cta" href="demo.html">Open the interactive demo →</a>
-  <a class="cta ghost" href="#how">How it works</a>
+  <a class="cta ghost" href="#visibility">The visibility screen</a>
+
+  <h2 id="visibility">The metric that matters: are you in the answer?<span class="newtag">v1.3</span></h2>
+  <p class="dim">Two client-facing numbers, tracked across five AI engines, three runs per prompt per
+  week, against a baseline frozen the day the engagement starts.</p>
+  <div class="metrics">
+    <div class="metric"><div class="lbl">Client-facing</div><div class="nm">Visibility</div><div class="desc">Share of tracked prompts where the brand appears in the answer.</div></div>
+    <div class="metric"><div class="lbl">Client-facing</div><div class="nm">Link Rate</div><div class="desc">Share of those appearances that link back to the site.</div></div>
+    <div class="metric"><div class="lbl">Client-facing</div><div class="nm">Share of Voice</div><div class="desc">Brand appearances vs the whole competitor set, per engine.</div></div>
+    <div class="metric"><div class="lbl">Engines</div><div class="nm">5 tracked</div><div class="desc">ChatGPT · Gemini · Perplexity · Google AI Overview · Claude.</div></div>
+  </div>
+  <p class="dim">The <strong>baseline visibility screen</strong> is the sales instrument: a prompt-level
+  table showing, for every prompt and every engine, whether the brand appears, whether it links, its
+  position in the answer — and when it is absent, <strong>who appears instead</strong> (a competitor, or
+  nobody at all). Plus a competitor heatmap, the frozen search-baseline, and a technical-health
+  readout. Run-based mention/citation rates stay internal, for volatility tracking only — the client
+  never sees two things called "citation rate".</p>
 
   <h2 id="how">The pipeline</h2>
   <div class="flow">
-    <span class="stage">0 · Baseline<small>pre-engagement audit</small></span>
+    <span class="stage">0 · Baseline<small>frozen at onboarding</small></span>
     <span class="arrow">→</span>
     <span class="stage">1 · Research<small>opportunities</small></span>
     <span class="gate">⏸ specialist approves plan</span>
@@ -71,7 +94,7 @@ pre { background: var(--panel); border: 1px solid var(--line); border-radius: 8p
     <span class="arrow">→</span>
     <span class="stage">5 · Publish<small>symmetry gate · hidden post</small></span>
     <span class="arrow">→</span>
-    <span class="stage">6 · Monitor<small>citations · whitespace</small></span>
+    <span class="stage">6 · Monitor<small>visibility · decay</small></span>
     <span class="gate">⏸ specialist approves report</span>
     <span class="arrow">→</span>
     <span class="stage">7 · Optimize<small>fix &amp; refresh</small></span>
@@ -85,15 +108,25 @@ pre { background: var(--panel); border: 1px solid var(--line); border-radius: 8p
 
   <h2>What each agent does</h2>
   <div class="grid">
-    <div class="card"><div class="n">AGENT 0 · NEW</div><h3>Baseline audit</h3><p>Runs automatically at onboarding, before any engagement: scores every existing page for citability, flags JS-rendered and orphaned content, scans the legacy corpus for contradictions, records who each AI engine cites today per query (client, competitor or nobody), and audits robots.txt. The before/after evidence base.</p></div>
-    <div class="card"><div class="n">AGENT 1</div><h3>Research</h3><p>Keyword expansion, conversational long-tail discovery, competitor gap analysis, AI-intent mapping and a hub-and-spoke topical map. Long-tail first is enforced; citation-whitespace queries get a priority bonus. Output: a prioritized monthly content plan (8–12 articles), with corpus contradictions flagged.</p></div>
+    <div class="card"><div class="n">AGENT 0 · FROZEN BASELINE</div><h3>Baseline audit</h3><p>Runs once at onboarding and is <strong>frozen forever</strong> — every re-crawl becomes a dated current-state snapshot compared against it, so the before/after story never drifts. Scores existing pages for citability, flags JS-rendered and orphaned content, scans for contradictions, captures the traditional-search baseline (GSC), and records who each engine cites today per query. Audits robots.txt across the six required AI crawlers.</p></div>
+    <div class="card"><div class="n">AGENT 1</div><h3>Research</h3><p>Keyword expansion, conversational long-tail discovery, competitor gap analysis, AI-intent mapping and a hub-and-spoke topical map. Long-tail first is enforced; citation-whitespace queries get a priority bonus. Also generates the client's <strong>prompt set</strong> (40–100 intent-grouped prompts, funnel-staged) for tracking. Output: a prioritized monthly content plan (8–12 articles).</p></div>
     <div class="card"><div class="n">AGENT 2</div><h3>Brief</h3><p>One brief per planned article: target keywords with fan-out queries, word count, heading structure, internal link targets tagged by cluster (spokes → pillar, pillar → spokes), schema type, competing URLs and a Unique Information Delta directive.</p></div>
-    <div class="card"><div class="n">AGENT 3</div><h3>Writer</h3><p>Long-form drafts built for citation: a direct answer in the first 150 words, named entities, sourced facts, a mandatory FAQ, JSON-LD schema, 2,000+ words — and <strong>semantic relationship links</strong>: every internal link carries a conceptual bridge explaining how the two pieces relate. Rewrites target the exact criteria Quality failed.</p></div>
-    <div class="card"><div class="n">AGENT 4</div><h3>Quality</h3><p>Scores every draft 0–100 against the Signal Clarity rubric v2 below (weights configurable per client). Bare links are a hard fail regardless of score. Runs a contradiction check against the live corpus — severe conflicts block the draft. Still failing after max attempts → escalated with one-click resolution.</p></div>
+    <div class="card"><div class="n">AGENT 3</div><h3>Writer</h3><p>Long-form drafts built for citation: a direct answer in the first 150 words, named entities, sourced facts, a mandatory FAQ, JSON-LD schema, 2,000+ words — and <strong>semantic relationship links</strong>: every internal link carries a conceptual bridge. Produces native Dutch or English; regulated clients get a mandatory compliance disclaimer. Rewrites target the exact criteria Quality failed.</p></div>
+    <div class="card"><div class="n">AGENT 4</div><h3>Quality</h3><p>Scores every draft 0–100 against the Signal Clarity rubric v2 below (weights configurable per client). Bare links are a hard fail; regulated clients get a hard compliance check. Runs a contradiction check against the live corpus — severe conflicts block the draft. Still failing after max attempts → escalated with one-click resolution.</p></div>
     <div class="card"><div class="n">AGENT 5</div><h3>Publish</h3><p>Verifies robots.txt allows all six AI crawlers (GPTBot, ClaudeBot, PerplexityBot, Googlebot, Gemini-Bot, Bingbot), enforces the <strong>symmetry gate</strong> (JSON-LD must exactly match the rendered page), publishes as a hidden post, requires a plugin webhook confirmation, verifies the live page renders as static HTML, regenerates the clustered sitemap + llms.txt, pings IndexNow and Search Console.</p></div>
-    <div class="card"><div class="n">AGENT 6</div><h3>Monitor</h3><p>Weekly per-keyword rankings, GA4 traffic, AI-bot crawls and per-engine citation status — plus <strong>query ownership</strong>: who each engine cites for every target query, surfacing whitespace where nobody is cited. Tracks hidden-post traffic against the visitor threshold and raises client visibility notifications.</p></div>
+    <div class="card"><div class="n">AGENT 6</div><h3>Monitor</h3><p>Weekly rankings, GA4 traffic, AI-bot crawls and per-engine appearance across all five engines — the client-facing <strong>Visibility</strong> and <strong>Link Rate</strong> scorecard, query ownership and whitespace, hidden-post traffic thresholds, and the <strong>decay watchlist</strong>: pages scored 0–100 for health, flagged only after two consecutive low reports.</p></div>
     <div class="card"><div class="n">AGENT 7</div><h3>Optimize</h3><p>Rewrites intros, extends FAQs, reinforces internal links and refreshes facts on flagged pages, republishes them, and feeds new content gaps and whitespace queries back to Research — closing the loop.</p></div>
     <div class="card"><div class="n">CROSS-CUTTING</div><h3>Orchestration</h3><p>Structured JSON handoffs with PASS / FAIL / NEEDS_REVIEW / ESCALATE_TO_HUMAN statuses, independently triggerable stages, configurable thresholds per client, multi-client state and a central audit log.</p></div>
+  </div>
+
+  <h2>The product layer<span class="newtag">v1.2 + v1.3</span></h2>
+  <div class="grid">
+    <div class="card"><div class="n">ONBOARDING</div><h3>Brand profile gate</h3><p>Deep intake — company description, tone, brand rules, target audiences, NL/EN, regulated-industry flag — drafted into a brand profile alongside a site crawl. Nothing is written until a specialist approves it.</p></div>
+    <div class="card"><div class="n">PROMPT SETS</div><h3>What we track, agreed up front</h3><p>40–100 intent-grouped, funnel-staged prompts generated from the profile, specialist-approved, then shown read-only to the client — so they catch missing product lines before tracking starts.</p></div>
+    <div class="card"><div class="n">WEEKLY REPORT</div><h3>Volatility-aware, shareable</h3><p>Every prompt checked three times per engine; Visibility, Link Rate and Share of Voice with a 4-week rolling average against the frozen baseline. A token-gated, printable web report — with an <strong>anonymised demo mode</strong> for sales calls.</p></div>
+    <div class="card"><div class="n">CLIENT PORTAL</div><h3>Scoped, read-only</h3><p>A per-client dashboard behind its own link: the Visibility scorecard, content inventory, the latest report, and exactly two client decisions — approve/revise/reject drafts, and make a hidden post visible. It can never reach another client's data.</p></div>
+    <div class="card"><div class="n">AUTH + WHITE-LABEL</div><h3>Multi-tenant shell</h3><p>The operator console sits behind a staff session; the client portal and web report carry their own scoped tokens. Brand identity is one config object — white-label ready.</p></div>
+    <div class="card"><div class="n">DECAY WATCHLIST</div><h3>Refresh, before the drop</h3><p>Each published page scored 0–100 on citation status, ranking, traffic, age, factual staleness and competitive displacement — queued for the next refresh cycle only after two consecutive low reports. Nothing acts on a single observation.</p></div>
   </div>
 
   <h2>The Signal Clarity scoring rubric (v2)</h2>
@@ -117,34 +150,36 @@ pre { background: var(--panel); border: 1px solid var(--line); border-radius: 8p
 
   <h2>Human oversight, by design</h2>
   <p>Three gates keep specialists in control without slowing the machine down:
-  the <strong>content plan</strong> requires specialist approval before production starts; drafts can require
-  <strong>client review</strong> before publishing (configurable per client); the <strong>performance report</strong>
+  the <strong>brand profile</strong> and the <strong>content plan</strong> require specialist approval before production starts; drafts can require
+  <strong>client review</strong> before publishing (configurable per client, now surfaced in the client portal); the <strong>performance report</strong>
   requires specialist sign-off before optimization runs. Anything the agents can't resolve raises an
   <span class="mono">ESCALATE_TO_HUMAN</span> into the escalation queue.</p>
 
   <h2>The WordPress plugin interface</h2>
-  <p class="dim">The client-facing dashboard connects over a small authenticated REST API (per-client <code>x-api-key</code>):</p>
+  <p class="dim">The client-facing dashboard connects over a small authenticated REST API (per-client <code>x-api-key</code>). The operator console runs behind a staff session; the client portal and web report carry their own scoped tokens:</p>
   <pre>GET  /api/plugin/published            → published content metadata (URL, title, schema, visibility)
 GET  /api/plugin/performance          → rankings, per-engine citations, traffic, whitespace, baseline
+GET  /api/plugin/prompt-set           → the approved prompt set, read-only for the client
 GET  /api/plugin/notifications        → pending traffic-threshold notifications for the client
 POST /api/plugin/settings             → client settings push (keywords, niche, competitors, voice)
 POST /api/plugin/content-decision     → client approvals (approved / rejected / revision requested)
 POST /api/plugin/visibility-decision  → make a hidden post publicly visible, or keep it hidden
 POST /api/plugin/publish-confirmation → webhook: the plugin confirms a post is live</pre>
 
-  <h2>About this prototype</h2>
-  <p>The engine, orchestration, gates, scoring and APIs are fully implemented and covered by an
-  automated end-to-end test suite. Every external service (Google Ads, DataForSEO, Search Console,
+  <h2>About this build</h2>
+  <p>The engine, orchestration, gates, scoring, auth, portal and APIs are fully implemented and covered
+  by an automated end-to-end test suite. Every external service (Google Ads, DataForSEO, Search Console,
   GA4, Ahrefs, WordPress REST, IndexNow, the writing LLM, and per-engine citation checks) sits behind
   an adapter interface with <strong>deterministic mocks</strong>, so the whole system runs — and can be
   demoed — without credentials. Swapping a mock for a live integration is a one-file change per service.</p>
   <p>The <a href="demo.html">interactive demo</a> runs the real agents entirely in your browser:
-  onboard a client, run each stage, approve plans, watch the quality retry loop, publish, see a
-  citation drop get flagged and optimized. Nothing leaves the page.</p>
+  onboard a client, run each stage, approve plans, watch the quality retry loop, publish, open the
+  baseline visibility screen, see a citation drop get flagged and optimized, and read the shareable
+  weekly report. Nothing leaves the page.</p>
 
   <div class="footer">
-    Aureva backend pipeline prototype · built by AU Consulting ·
-    <span class="badge">PASS</span><span class="badge">NEEDS_REVIEW</span><span class="badge">ESCALATE_TO_HUMAN</span>
+    Aureva product build · built by AU Consulting ·
+    <span class="badge">Visibility</span><span class="badge">Link Rate</span><span class="badge">Share of Voice</span>
   </div>
 </div>
 </body>
