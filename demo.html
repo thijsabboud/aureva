@@ -6,17 +6,23 @@
 <title>Aureva — Pipeline Console (Interactive Demo)</title>
 <style>
 * { box-sizing: border-box; margin: 0; }
+/* Aureva brand palette (aureva-logo-pack): Ink #0E0E0C · Paper #FAFAF8 ·
+   Blue #2563EB · Purple #7C3AED. Dark operator surface keeps the ink family;
+   accents are readable tints of the brand blue/purple; solid brand blue on
+   primary actions. */
 :root {
-  --bg: #0e1116; --panel: #161b23; --panel2: #1d242f; --line: #2a3341;
-  --text: #dbe2ec; --dim: #8b96a5; --accent: #d4a24c; --accent2: #4c9ed4;
+  --bg: #0e0e0c; --panel: #161614; --panel2: #1f1f1c; --line: #32322e;
+  --text: #e8e8e4; --dim: #97978f;
+  --accent: #5b8bf7; --accent-strong: #2563EB; --accent2: #a78bfa;
   --ok: #3fae6a; --warn: #d4884c; --bad: #d45050;
 }
-body { background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, "Segoe UI", sans-serif; }
+body { background: var(--bg); color: var(--text); font: 14px/1.5 'Sora', 'Inter', -apple-system, "Segoe UI", sans-serif; }
 #app { display: flex; min-height: 100vh; }
 
 #sidebar { width: 230px; background: var(--panel); border-right: 1px solid var(--line); padding: 16px 12px; flex-shrink: 0; }
-.brand { font-weight: 700; letter-spacing: 2px; color: var(--accent); margin-bottom: 4px; }
-.brand span { display: block; font-weight: 400; letter-spacing: 0; color: var(--dim); font-size: 11px; }
+.brand { margin-bottom: 4px; }
+.brand svg { height: 30px; width: auto; display: block; }
+.brand span { display: block; font-weight: 400; letter-spacing: 0; color: var(--dim); font-size: 11px; margin-top: 6px; }
 #btn-new-client { width: 100%; margin: 14px 0; }
 #client-list a { display: block; padding: 8px 10px; border-radius: 6px; color: var(--text); text-decoration: none; margin-bottom: 4px; border: 1px solid transparent; }
 #client-list a.sel { background: var(--panel2); border-color: var(--line); }
@@ -34,7 +40,7 @@ h3 { font-size: 13px; margin: 12px 0 6px; }
 
 button { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 7px 12px; cursor: pointer; font-size: 13px; }
 button:hover { border-color: var(--accent); }
-button.primary { background: var(--accent); color: #14100a; border-color: var(--accent); font-weight: 600; }
+button.primary { background: var(--accent-strong); color: #fff; border-color: var(--accent-strong); font-weight: 600; }
 button.danger { border-color: var(--bad); color: var(--bad); }
 button:disabled { opacity: .45; cursor: default; }
 
@@ -75,7 +81,7 @@ pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; 
 .b-visible { color: var(--ok); border-color: var(--ok); }
 .b-hidden { color: var(--accent); border-color: var(--accent); }
 
-#demo-banner { background: linear-gradient(90deg, #2a2214, #161b23); border-bottom: 1px solid var(--accent); padding: 8px 16px; font-size: 12px; color: var(--dim); display: flex; gap: 12px; align-items: center; }
+#demo-banner { background: linear-gradient(90deg, #131a2e, #161614); border-bottom: 1px solid var(--accent); padding: 8px 16px; font-size: 12px; color: var(--dim); display: flex; gap: 12px; align-items: center; }
 #demo-banner strong { color: var(--accent); }
 #demo-banner button { padding: 3px 10px; font-size: 12px; }
 #demo-banner button:first-of-type { margin-left: auto; }
@@ -90,7 +96,11 @@ pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; 
 </div>
 <div id="app">
   <aside id="sidebar">
-    <div class="brand">AUREVA <span>pipeline console</span></div>
+    <div class="brand"><svg width="160" height="40" viewBox="0 0 160 40" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Aureva">
+  <rect width="40" height="40" rx="9" fill="#FAFAF8"/>
+  <path d="M20 7L34 33H6L20 7Z" fill="#0E0E0C"/>
+  <text x="52" y="27" font-family="'Sora', 'Inter', -apple-system, sans-serif" font-size="22" font-weight="600" letter-spacing="-0.5" fill="#FAFAF8">Aureva</text>
+</svg><span>pipeline console</span></div>
     <button id="btn-new-client" data-testid="new-client" onclick="showOnboard()">+ New client</button>
     <nav id="client-list" data-testid="client-list"></nav>
   </aside>
@@ -112,6 +122,10 @@ function __require(p) {
   if (name === 'crypto') {
     return { randomBytes: (n) => ({ toString: () =>
       Array.from(crypto.getRandomValues(new Uint8Array(n))).map(b => b.toString(16).padStart(2, '0')).join('') }) };
+  }
+  if (name === 'fs') { // config.js touches fs only for service-account files — never in the demo
+    return { existsSync: () => false, readFileSync: () => { throw new Error('fs unavailable in demo'); },
+      mkdirSync: () => {}, appendFileSync: () => {}, readdirSync: () => [], renameSync: () => {}, writeFileSync: () => {} };
   }
   if (!__modules[name]) throw new Error('demo module not found: ' + name);
   return __modules[name];
@@ -996,17 +1010,177 @@ module.exports = {
 
 });
 
+__define('config', function (module, exports, require) {
+'use strict';
+// v1.4 — integration configuration. One rule everywhere: a source is LIVE iff
+// its credential is present in the environment, MOCK otherwise (mixed-mode by
+// design, per source). Credentials live in env only — never in the repo, the
+// db, or any API response. Everything here takes an explicit `env` so tests
+// inject their own.
+
+const fs = require('fs');
+
+// Engine → which env credential turns it live. google_ai_overview has no
+// first-party API and rides on DataForSEO (API spec §2.1/§6).
+const ENGINE_KEYS = {
+  chatgpt: 'AUREVA_OPENAI_KEY',
+  claude: 'AUREVA_ANTHROPIC_KEY',
+  gemini: 'AUREVA_GEMINI_KEY',
+  perplexity: 'AUREVA_PERPLEXITY_KEY'
+};
+
+function engineKey(engine, env = process.env) {
+  if (engine === 'google_ai_overview') return dataforseo(env) ? 'dataforseo' : null;
+  const name = ENGINE_KEYS[engine];
+  return (name && env[name]) || null;
+}
+
+function engineMode(engine, env = process.env) {
+  return engineKey(engine, env) ? 'live' : 'mock';
+}
+
+function dataforseo(env = process.env) {
+  if (!env.AUREVA_DATAFORSEO_LOGIN || !env.AUREVA_DATAFORSEO_PASSWORD) return null;
+  return {
+    login: env.AUREVA_DATAFORSEO_LOGIN,
+    password: env.AUREVA_DATAFORSEO_PASSWORD,
+    sandbox: env.AUREVA_DATAFORSEO_SANDBOX === '1'
+  };
+}
+
+// Google service account: path to the SA JSON file, or the JSON itself.
+function googleSA(env = process.env) {
+  const raw = env.AUREVA_GOOGLE_SA;
+  if (!raw) return null;
+  try {
+    const text = raw.trim().startsWith('{') ? raw : fs.readFileSync(raw, 'utf8');
+    const sa = JSON.parse(text);
+    return sa.client_email && sa.private_key ? sa : null;
+  } catch {
+    return null;
+  }
+}
+
+// Per-engine model overrides — defaults chosen cheap; the runs-per-prompt dial
+// and these models are the two cost levers (API spec §2.3).
+function engineModel(engine, env = process.env) {
+  const defaults = {
+    chatgpt: 'gpt-5-mini',
+    claude: 'claude-haiku-4-5',
+    gemini: 'gemini-2.5-flash',
+    perplexity: 'sonar'
+  };
+  const override = {
+    chatgpt: env.AUREVA_OPENAI_MODEL,
+    claude: env.AUREVA_ANTHROPIC_MODEL,
+    gemini: env.AUREVA_GEMINI_MODEL,
+    perplexity: env.AUREVA_PERPLEXITY_MODEL
+  }[engine];
+  return override || defaults[engine];
+}
+
+// Integration status board (console "integrations" tab). Names and modes only —
+// this structure is serialised to the browser, so it must never carry values.
+function integrationStatus(env = process.env, store = null) {
+  const notes = (store && store.integrationNotes && store.integrationNotes()) || {};
+  const row = (id, label, kind, mode, detail) => ({
+    id, label, kind, mode,
+    configured: mode === 'live',
+    detail: detail || null,
+    lastSuccess: (notes[id] && notes[id].lastSuccess) || null,
+    lastError: (notes[id] && notes[id].lastError) || null
+  });
+  const engineLabel = {
+    chatgpt: 'ChatGPT (OpenAI Responses + web_search)',
+    claude: 'Claude (Anthropic Messages + web_search)',
+    gemini: 'Gemini (Search grounding)',
+    perplexity: 'Perplexity (sonar)',
+    google_ai_overview: 'Google AI Overview (via DataForSEO SERP)'
+  };
+  const rows = Object.keys(engineLabel).map(e =>
+    row(e, engineLabel[e], 'engine', engineMode(e, env)));
+  rows.push(row('dataforseo', 'DataForSEO (SERP · keywords · backlinks)', 'aureva',
+    dataforseo(env) ? 'live' : 'mock', dataforseo(env) && dataforseo(env).sandbox ? 'sandbox' : null));
+  rows.push(row('google_sa', 'Google service account (GSC + GA4)', 'aureva',
+    googleSA(env) ? 'live' : 'mock'));
+  rows.push(row('bing', 'Bing Webmaster Tools', 'client', 'per-client',
+    'API key granted per client at onboarding'));
+  rows.push(row('wordpress', 'WordPress REST (publishing)', 'client', 'per-client',
+    'Application Password granted per client'));
+  rows.push(row('indexnow', 'IndexNow', 'client', 'per-client',
+    'key file on the client domain; fired on publish'));
+  return rows;
+}
+
+module.exports = { engineKey, engineMode, engineModel, dataforseo, googleSA, integrationStatus };
+
+});
+
+__define('cost', function (module, exports, require) {
+'use strict';
+// Per-client cost ledger — cost is a product feature (Sami's pricing math:
+// €5–15/client/month all-in external data). Monthly rollup per source, shown
+// on the integrations tab. Estimates from published rates, not invoices.
+
+function recordCost(client, sourceId, eur, at) {
+  if (!eur || eur <= 0) return;
+  const month = String(at || new Date().toISOString()).slice(0, 7);
+  if (!client.costLedger) client.costLedger = {};
+  const m = client.costLedger[month] || (client.costLedger[month] = { total: 0, bySource: {} });
+  m.bySource[sourceId] = (m.bySource[sourceId] || 0) + eur;
+  m.total += eur;
+}
+
+function monthTotal(client, month) {
+  return (client.costLedger && client.costLedger[month] && client.costLedger[month].total) || 0;
+}
+
+module.exports = { recordCost, monthTotal };
+
+});
+
 __define('brand', function (module, exports, require) {
 'use strict';
-// White-label groundwork (v1.3 item 5 / v5 §5.2): the ONE place the brand
-// identity lives. The web report and the client portal read it; swapping the
-// brand for a white-label partner means overriding AUREVA_BRAND (JSON) — no
-// code changes anywhere else.
+// White-label groundwork (v5 §5.2) + the v1.4 brand landing: the ONE place the
+// brand identity lives. The web report, the client portal and the console read
+// it; swapping the brand for a white-label partner means overriding
+// AUREVA_BRAND (JSON) — no code changes anywhere else.
+//
+// Defaults come from the Aureva logo pack (aureva-logo-pack/README.txt):
+// colours Ink/Paper/Blue/Purple, wordmark font Sora (fallback Inter → system),
+// and the mark as an INLINE SVG so every rendered surface — including blob
+// pages inside demo.html — is self-contained with no asset-path dependency.
+// (The pack's own note: keep branding configurable, not hardcoded.)
+
+const LOGO_PRIMARY_SVG = `<svg width="160" height="40" viewBox="0 0 160 40" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Aureva">
+  <rect width="40" height="40" rx="9" fill="#0E0E0C"/>
+  <path d="M20 7L34 33H6L20 7Z" fill="#FAFAF8"/>
+  <text x="52" y="27" font-family="'Sora', 'Inter', -apple-system, sans-serif" font-size="22" font-weight="600" letter-spacing="-0.5" fill="#0E0E0C">Aureva</text>
+</svg>`;
+
+const LOGO_REVERSED_SVG = `<svg width="160" height="40" viewBox="0 0 160 40" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Aureva">
+  <rect width="40" height="40" rx="9" fill="#FAFAF8"/>
+  <path d="M20 7L34 33H6L20 7Z" fill="#0E0E0C"/>
+  <text x="52" y="27" font-family="'Sora', 'Inter', -apple-system, sans-serif" font-size="22" font-weight="600" letter-spacing="-0.5" fill="#FAFAF8">Aureva</text>
+</svg>`;
+
+const MARK_SVG = `<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Aureva mark">
+  <rect width="40" height="40" rx="9" fill="#0E0E0C"/>
+  <path d="M20 7L34 33H6L20 7Z" fill="#FAFAF8"/>
+</svg>`;
+
 const DEFAULT_BRAND = {
   name: 'AUREVA',
   displayName: 'Aureva', // brand name as it reads in client-facing prose (logoText stays the uppercase mark)
-  accentColor: '#0f6f5c',
-  logoText: 'AUREVA'
+  logoText: 'AUREVA',
+  ink: '#0E0E0C',
+  paper: '#FAFAF8',
+  accentColor: '#2563EB',    // brand blue
+  secondaryColor: '#7C3AED', // brand purple
+  font: "'Sora', 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif",
+  logoSvg: LOGO_PRIMARY_SVG,        // light backgrounds (report, portal)
+  logoSvgReversed: LOGO_REVERSED_SVG, // dark backgrounds (operator console)
+  markSvg: MARK_SVG
 };
 
 function getBrand() {
@@ -1027,86 +1201,112 @@ __define('prompt-runner', function (module, exports, require) {
 'use strict';
 // Prompt-runner adapter — THE DATA ASSET / MOAT. Executes a client's approved
 // prompt set against the AI engines and records every run: the per-client
-// prompt-run history nobody else owns. This is the live seam that, once real
-// engine credentials land, replaces the deterministic prompt mocks exactly the
-// way live-crawl.js replaced the crawler mock (via a stored artifact the
-// existing consumers read through a resolver — no rewrite of the metric math).
+// prompt-run history nobody else owns.
 //
-// Boundary: a PROVIDER performs one (engine, prompt) query and returns a parsed
-// observation. The runner fans that over prompt × engine × run, timestamps it,
-// and the orchestrator stores it on the client. Two providers ship today:
-//   mockProvider — deterministic, derived from the existing mock so the demo
-//     and tests run with zero credentials and stay byte-consistent with current
-//     behaviour (a stored mock week reproduces today's Visibility/Link Rate).
-//   liveProvider — per-engine stubs that throw until credentials + answer
-//     parsing are wired. Recommended transport per engine documented inline.
-//     NO headless browsers / detector evasion (v5 §7 do-not-build).
+// v1.4: the live provider is real. Per engine, per run:
+//   live iff the engine's credential is configured (mixed-mode by design,
+//   observation tagged source: 'live' | 'mock'); full verbatim answer stored
+//   in the AnswerStore (JSONL, answerRef on the observation); extraction via
+//   engines/parse (re-runnable — `npm run reparse`); per-call cost estimate;
+//   a failed call becomes an error observation, the week completes and
+//   coverage is reported. Engines flagged deterministicPerWindow (Google AI
+//   Overview — a SERP property, not a sampled generation) are called once per
+//   (prompt, week) and cached across the runsPerPrompt runs (API spec §2.3).
+//   NO headless browsers / detector evasion (v5 §7 do-not-build).
 //
-// Storage: run records append to client.promptRunHistory[] (the asset is the
-// history; a re-run of the same week replaces that week only). Behind
-// store.js → Postgres later.
+// The live modules are required lazily so the zero-credential demo bundle
+// never needs them (demo.html only ever uses the mock provider).
 const mock = require('./mock');
 
-// Keep the volatility discipline: ≥3 runs per prompt per engine, never single-run.
+// Volatility discipline: ≥3 runs per prompt per engine, never single-run.
+// v1.4: per-client configurable via thresholds.runsPerPrompt (cost dial).
 const RUNS_PER_PROMPT = mock.PROMPT_RUNS;
 
 // An OBSERVATION (one run of one prompt on one engine):
-//   { mentioned:boolean, cited:boolean, position:1..10|null,
-//     insteadOf:'competitor:<domain>'|null, answerRef:string|null }
-// answerRef points at the stored raw answer text — the input to verified-facts /
-// hallucination monitoring (v5 §2). null for the mock (no real answer captured).
+//   { mentioned, cited, position: 1..10|null, insteadOf: 'competitor:<d>'|null,
+//     answerRef: string|null, source: 'live'|'mock', costEUR?, error? }
 
 // ---- Providers --------------------------------------------------------------
+
+function mockObservation(engine, promptText, ctx) {
+  const run = mock.promptRunCheck(ctx.client.id, promptText, engine, ctx.week, ctx.runIdx);
+  // week-level appearance detail (position / who-appears-instead)
+  const appear = mock.promptAppearance(ctx.client, promptText, engine, ctx.week);
+  return {
+    mentioned: run.mentioned,
+    cited: run.cited,
+    position: run.mentioned ? appear.position : null,
+    insteadOf: run.mentioned ? null : appear.insteadOf,
+    answerRef: null,
+    source: 'mock'
+  };
+}
 
 // Deterministic provider: reuses the existing mock primitives so a stored run
 // is exactly consistent with the on-the-fly mock the pipeline uses today.
 function mockProvider() {
   return {
     id: 'mock',
-    // eslint-disable-next-line no-unused-vars
-    async query(engine, promptText, ctx) {
-      const run = mock.promptRunCheck(ctx.client.id, promptText, engine, ctx.week, ctx.runIdx);
-      // week-level appearance detail (position / who-appears-instead); only
-      // meaningful for the mock's notion of position, which is week-stable.
-      const appear = mock.promptAppearance(ctx.client, promptText, engine, ctx.week);
-      return {
-        mentioned: run.mentioned,
-        cited: run.cited,
-        position: run.mentioned ? appear.position : null,
-        insteadOf: run.mentioned ? null : appear.insteadOf,
-        answerRef: null
-      };
-    }
+    async query(engine, promptText, ctx) { return mockObservation(engine, promptText, ctx); }
   };
 }
 
-// Per-engine live transports. Recommendation (Ole to confirm before keys go in):
-// first-party API per engine + a SERP provider for Google AI Overview (which has
-// no first-party API). DataForSEO is already a listed KPI source (v4). Explicitly
-// NOT headless browsers.
-const LIVE_TRANSPORT = {
-  claude: 'Anthropic Messages API + web_search tool → parse cited domains from the answer',
-  perplexity: 'Perplexity sonar API → native citations array (cleanest link signal)',
-  gemini: 'Google Gemini API with Search grounding → groundingMetadata citations',
-  chatgpt: 'OpenAI Responses API + web_search tool → url_citation annotations',
-  google_ai_overview: 'DataForSEO SERP API (AI Overview element) — no first-party API exists'
-};
+// Live provider — config: { env, fetchFn, answers: AnswerStore|null, sleep }.
+// Unconfigured engines fall back to the mock observation (tagged), so a week
+// can run the moment the FIRST credential lands.
+function liveProvider(providerConfig = {}) {
+  const config = require('../config');
+  const engines = require('./engines');
+  const { extractObservation } = require('./engines/parse');
+  const env = providerConfig.env || process.env;
+  const { fetchFn = globalThis.fetch, answers = null, sleep } = providerConfig;
+  const windowCache = new Map(); // `${engine}|${prompt}|${week}` → observation
 
-// Live provider stub: each engine throws until its transport + credentials are
-// wired. Kept as one place so wiring an engine is filling one branch.
-function liveProvider(config = {}) {
   return {
     id: 'live',
-    config,
-    // eslint-disable-next-line no-unused-vars
     async query(engine, promptText, ctx) {
-      const transport = LIVE_TRANSPORT[engine] || 'unknown engine';
-      const err = new Error(
-        `Prompt-runner live provider not configured for "${engine}". ` +
-        `Wire: ${transport}. Provide credentials in the provider config.`
-      );
-      err.code = 'PROVIDER_NOT_CONFIGURED';
-      throw err;
+      const mod = engines[engine];
+      if (!mod || !mod.isConfigured(env)) return mockObservation(engine, promptText, ctx);
+
+      const cacheKey = `${engine}|${promptText}|w${ctx.week}`;
+      if (mod.deterministicPerWindow && windowCache.has(cacheKey)) {
+        // identical answer, already stored and paid for once
+        return { ...windowCache.get(cacheKey), costEUR: 0 };
+      }
+      let res;
+      try {
+        res = await mod.query(promptText, { env, fetchFn, sleep });
+      } catch (err) {
+        return { error: err.message, source: 'live', answerRef: null };
+      }
+      const parsed = extractObservation(res, ctx.client);
+      const answerRef = answers ? answers.append(ctx.client.id, ctx.week, {
+        engine,
+        promptId: ctx.promptId || null,
+        promptText,
+        runIdx: ctx.runIdx,
+        model: res.model || null,
+        rawText: res.rawText,
+        sources: res.sources,
+        costEUR: res.costEUR || 0,
+        parsed: {
+          mentioned: parsed.mentioned, cited: parsed.cited, citedUrl: parsed.citedUrl,
+          position: parsed.position, competitors: parsed.competitors,
+          sentiment: parsed.sentiment, claims: parsed.claims
+        }
+      }) : null;
+      const firstCompetitor = Object.keys(parsed.competitors)[0] || null;
+      const observation = {
+        mentioned: parsed.mentioned,
+        cited: parsed.cited,
+        position: parsed.position,
+        insteadOf: !parsed.mentioned && firstCompetitor ? `competitor:${firstCompetitor}` : null,
+        answerRef,
+        source: 'live',
+        costEUR: res.costEUR || 0
+      };
+      if (mod.deterministicPerWindow) windowCache.set(cacheKey, observation);
+      return observation;
     }
   };
 }
@@ -1114,19 +1314,39 @@ function liveProvider(config = {}) {
 // ---- Runner -----------------------------------------------------------------
 
 // Execute the approved prompt set for one week → a run record. Pure w.r.t. the
-// store; the orchestrator persists the result (runPromptWeek).
+// store; the orchestrator persists the result (runPromptWeek). Partial weeks
+// are valid: a failing engine yields error observations and coverage < 1.
 async function runWeek(client, week, provider = mockProvider()) {
   if (!client.promptSet || client.promptSet.status !== 'approved') {
     const e = new Error('No approved prompt set to run'); e.status = 400; throw e;
   }
+  const runsPerPrompt = (client.thresholds && client.thresholds.runsPerPrompt) || RUNS_PER_PROMPT;
   const prompts = [];
+  let observed = 0, total = 0, costEUR = 0;
+  const costByEngine = {};
+  const sources = { live: 0, mock: 0 };
   for (const group of client.promptSet.groups) {
     for (const prompt of group.prompts) {
       const engines = {};
       for (const engine of mock.ENGINES) {
         const runs = [];
-        for (let runIdx = 0; runIdx < RUNS_PER_PROMPT; runIdx++) {
-          runs.push(await provider.query(engine, prompt.text, { client, week, runIdx }));
+        for (let runIdx = 0; runIdx < runsPerPrompt; runIdx++) {
+          let obs;
+          try {
+            obs = await provider.query(engine, prompt.text, { client, week, runIdx, promptId: prompt.id });
+          } catch (err) {
+            obs = { error: err.message, source: provider.id === 'live' ? 'live' : 'mock', answerRef: null };
+          }
+          total++;
+          if (!obs.error) {
+            observed++;
+            sources[obs.source === 'live' ? 'live' : 'mock']++;
+          }
+          if (obs.costEUR) {
+            costEUR += obs.costEUR;
+            costByEngine[engine] = (costByEngine[engine] || 0) + obs.costEUR;
+          }
+          runs.push(obs);
         }
         engines[engine] = { runs };
       }
@@ -1139,8 +1359,12 @@ async function runWeek(client, week, provider = mockProvider()) {
   return {
     week,
     provider: provider.id,
-    runsPerPrompt: RUNS_PER_PROMPT,
+    runsPerPrompt,
     startedAt: new Date().toISOString(),
+    coverage: { observed, total, rate: total ? observed / total : 0 },
+    costEUR,
+    costByEngine,
+    sources,
     prompts
   };
 }
@@ -1148,7 +1372,8 @@ async function runWeek(client, week, provider = mockProvider()) {
 // ---- Read seam (what makes stored history flow into the metrics) ------------
 // Both resolvers prefer a stored real run for the (prompt, engine, week); they
 // fall back to the deterministic mock so behaviour is unchanged until real
-// history exists — the same gating idea as client.crawlCache for the crawler.
+// history exists. Error observations are skipped; an all-error cell falls back
+// to the mock so the metric math never divides by a hole.
 
 function storedPrompt(client, promptText, week) {
   const rec = (client.promptRunHistory || []).find(r => r.week === week);
@@ -1156,11 +1381,17 @@ function storedPrompt(client, promptText, week) {
   return rec.prompts.find(p => p.text === promptText) || null;
 }
 
+function validRuns(cell) {
+  return cell ? cell.runs.filter(o => o && !o.error && typeof o.mentioned === 'boolean') : [];
+}
+
 // The {mentioned,cited} primitive (drives internal run-based rates).
 function resolveRun(client, promptText, engine, week, runIdx) {
   const p = storedPrompt(client, promptText, week);
   const obs = p && p.engines[engine] && p.engines[engine].runs[runIdx];
-  if (obs) return { mentioned: !!obs.mentioned, cited: !!obs.cited };
+  if (obs && !obs.error && typeof obs.mentioned === 'boolean') {
+    return { mentioned: !!obs.mentioned, cited: !!obs.cited };
+  }
   return mock.promptRunCheck(client.id, promptText, engine, week, runIdx);
 }
 
@@ -1168,10 +1399,10 @@ function resolveRun(client, promptText, engine, week, runIdx) {
 // and the visibility-screen table). Derived from the stored runs when present.
 function resolveAppearance(client, promptText, engine, week) {
   const p = storedPrompt(client, promptText, week);
-  const cell = p && p.engines[engine];
-  if (cell) {
+  const runs = validRuns(p && p.engines[engine]);
+  if (runs.length) {
     let appeared = false, linked = false, position = null, insteadOf = null;
-    for (const obs of cell.runs) {
+    for (const obs of runs) {
       if (obs.mentioned) { appeared = true; if (position == null) position = obs.position; }
       if (obs.cited) linked = true;
       if (!appeared && insteadOf == null && obs.insteadOf) insteadOf = obs.insteadOf;
@@ -1185,9 +1416,57 @@ function resolveAppearance(client, promptText, engine, week) {
   return mock.promptAppearance(client, promptText, engine, week);
 }
 
+// Which data fed a stored week — labels the console/report honestly (a hard
+// v1.4 ground rule: simulated data is always marked as such).
+function weekDataSource(client, week) {
+  const rec = (client.promptRunHistory || []).find(r => r.week === week);
+  if (!rec) return 'mock';
+  let live = 0, mocked = 0;
+  for (const p of rec.prompts) {
+    for (const e of Object.keys(p.engines)) {
+      for (const o of p.engines[e].runs) {
+        if (o.error) continue;
+        if (o.source === 'live') live++; else mocked++;
+      }
+    }
+  }
+  if (live && mocked) return 'mixed';
+  return live ? 'live' : 'mock';
+}
+
+// ---- Reparse ----------------------------------------------------------------
+// Extraction improved? Re-derive the parsed observations for a stored week
+// from the raw answers. Raw text is never touched — it is the asset.
+function reparseWeek(client, week, answers) {
+  const { extractObservation } = require('./engines/parse');
+  const rec = (client.promptRunHistory || []).find(r => r.week === week);
+  if (!rec) return { reparsed: 0 };
+  let reparsed = 0;
+  for (const raw of answers.readWeek(client.id, week)) {
+    const p = rec.prompts.find(x => x.text === raw.promptText);
+    const cell = p && p.engines[raw.engine];
+    const matched = cell && cell.runs[raw.runIdx];
+    if (!matched || matched.source !== 'live') continue;
+    const parsed = extractObservation(raw, client);
+    const firstCompetitor = Object.keys(parsed.competitors)[0] || null;
+    // cached deterministic runs share one stored answer — update every run
+    // that points at this answerRef, not just the recorded runIdx
+    for (const obs of cell.runs) {
+      if (obs !== matched && obs.answerRef !== matched.answerRef) continue;
+      obs.mentioned = parsed.mentioned;
+      obs.cited = parsed.cited;
+      obs.position = parsed.position;
+      obs.insteadOf = !parsed.mentioned && firstCompetitor ? `competitor:${firstCompetitor}` : null;
+      delete obs.error;
+      reparsed++;
+    }
+  }
+  return { reparsed };
+}
+
 module.exports = {
-  runWeek, resolveRun, resolveAppearance,
-  mockProvider, liveProvider, LIVE_TRANSPORT, RUNS_PER_PROMPT
+  runWeek, resolveRun, resolveAppearance, weekDataSource, reparseWeek,
+  mockProvider, liveProvider, RUNS_PER_PROMPT
 };
 
 });
@@ -1903,8 +2182,15 @@ function monitor(client) {
   const run = client.monitorRuns;
   const prev = client.reports[client.reports.length - 1] || null;
 
-  const keywords = client.plan.prioritizedArticles.map(k =>
-    mock.gscKeywordData(client.id, k.keyword, run));
+  // live seam (v1.4): a nightly GSC pull fills client.gscCache; the mock
+  // covers every keyword the cache doesn't
+  const gscRows = (client.gscCache && client.gscCache.queries) || [];
+  const keywords = client.plan.prioritizedArticles.map(k => {
+    const live = gscRows.find(r => r.keyword === k.keyword);
+    return live
+      ? { keyword: k.keyword, impressions: live.impressions, clicks: live.clicks, position: live.position }
+      : mock.gscKeywordData(client.id, k.keyword, run);
+  });
   const firstSlug = [...published].sort((a, b) => a.slug.localeCompare(b.slug))[0].slug;
   // hash basis is the DOMAIN, not the random client id — SPEC §8 promises
   // reproducible runs, and the decay watchlist (v1.3) depends on it
@@ -2008,7 +2294,10 @@ function monitor(client) {
     createdAt: now(),
     status: 'pending_review',
     keywords,
-    ga4: mock.ga4Data(client.id, run),
+    // live seam (v1.4): nightly GA4 pull fills client.ga4Cache (incl. the AI
+    // referral channel); mock otherwise
+    ga4: (client.ga4Cache && client.ga4Cache.summary) || mock.ga4Data(client.id, run),
+    ...(client.ga4Cache && client.ga4Cache.aiReferrals ? { aiReferrals: client.ga4Cache.aiReferrals } : {}),
     citations,
     queryCitations,
     whitespace,
@@ -2107,7 +2396,8 @@ function decayScore(client, article, ctx) {
 // block averages the weekly rates over the last ≤4 reports (incl. this one) —
 // raw week-over-week numbers are never presented alone.
 function trackPrompts(client, run) {
-  const runs = mock.PROMPT_RUNS;
+  // v1.4: runs-per-prompt is the per-client cost-vs-confidence dial
+  const runs = (client.thresholds && client.thresholds.runsPerPrompt) || mock.PROMPT_RUNS;
   const results = [];
   const byIntentAcc = new Map();
   let mentionSum = 0, citeSum = 0, cells = 0;
@@ -2178,6 +2468,9 @@ function trackPrompts(client, run) {
     promptSetId: client.promptSet.id,
     promptCount: client.promptSet.total,
     runsPerPrompt: runs,
+    // v1.4 honesty label: which data fed this week — 'live', 'mixed' or 'mock'
+    // (simulated). Surfaces in the console; mock stays clearly marked.
+    dataSource: promptRunner.weekDataSource(client, run),
     weekly,
     rolling,
     baseline,
@@ -2271,6 +2564,7 @@ const agents = require('./agents');
 const mock = require('./adapters/mock');
 const intake = require('./intake');
 const promptRunner = require('./adapters/prompt-runner');
+const cost = require('./cost');
 const { uid, now } = require('./util');
 
 const STAGES = ['baseline', 'research', 'brief', 'writer', 'quality', 'publish', 'monitor', 'optimize', 'full'];
@@ -2725,6 +3019,23 @@ function updateSettings(store, clientId, input) {
   if (input.brandVoice) client.brandVoice = input.brandVoice;
   if (typeof input.simulateRobotsBlock === 'boolean') client.simulateRobotsBlock = input.simulateRobotsBlock;
   if (typeof input.simulateWebhookFailure === 'boolean') client.simulateWebhookFailure = input.simulateWebhookFailure;
+  // v1.4: per-client integration credentials (API spec §8 — what the client
+  // grants at onboarding). Merged, never wiped: blank/omitted fields keep the
+  // stored value, so the settings form can round-trip masked placeholders.
+  if (input.integrations && typeof input.integrations === 'object') {
+    const cur = client.integrations || {};
+    const keep = (v) => v !== undefined && v !== null && v !== '' && !(typeof v === 'object' && !Array.isArray(v));
+    const merged = { ...cur };
+    for (const [k, v] of Object.entries(input.integrations)) {
+      if (k === 'wp' && v && typeof v === 'object') {
+        merged.wp = { ...(cur.wp || {}) };
+        for (const [wk, wv] of Object.entries(v)) if (keep(wv)) merged.wp[wk] = wv;
+      } else if (keep(v)) {
+        merged[k] = v;
+      }
+    }
+    client.integrations = merged;
+  }
   audit(client, 'system', 'INFO', 'Settings updated.');
   store.save();
   return client;
@@ -2765,9 +3076,18 @@ async function runPromptWeek(store, clientId, week, opts = {}) {
   if (!Array.isArray(client.promptRunHistory)) client.promptRunHistory = [];
   // append-only across weeks; a re-run of the same week replaces that week only
   client.promptRunHistory = client.promptRunHistory.filter(r => r.week !== week).concat([record]);
+  // v1.4: live calls cost money — ledger it per engine per month (the €5–15
+  // per-client external-data budget is a product number, not an ops detail)
+  for (const [engine, eur] of Object.entries(record.costByEngine || {})) {
+    cost.recordCost(client, engine, eur, record.storedAt);
+  }
+  const mix = record.sources && record.sources.live
+    ? (record.sources.mock ? 'mixed live/mock' : 'live') : 'mock';
   audit(client, 'monitor', 'INFO',
-    `Prompt-run history recorded for week ${week} (${record.provider} provider, ` +
-    `${record.prompts.length} prompts × ${mock.ENGINES.length} engines × ${record.runsPerPrompt} runs).`);
+    `Prompt-run history recorded for week ${week} (${mix} data, ` +
+    `${record.prompts.length} prompts × ${mock.ENGINES.length} engines × ${record.runsPerPrompt} runs, ` +
+    `coverage ${Math.round((record.coverage ? record.coverage.rate : 1) * 100)}%` +
+    (record.costEUR ? `, ~€${record.costEUR.toFixed(3)}` : '') + ').');
   store.save();
   return record;
 }
@@ -2949,14 +3269,15 @@ function renderReport(client, report, opts = {}) {
 <style>
 :root { --ink:#1c2430; --dim:#68758a; --line:#dde3ec; --accent:${esc(brand.accentColor)}; --warn:#a15c07; --bg:#f6f8fb; }
 * { box-sizing: border-box; }
-body { font: 15px/1.55 -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); background: var(--bg); margin: 0; }
+body { font: 15px/1.55 ${brand.font || '-apple-system, "Segoe UI", Roboto, sans-serif'}; color: var(--ink); background: var(--bg); margin: 0; }
 .page { max-width: 880px; margin: 0 auto; padding: 32px 24px 64px; }
 header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; border-bottom: 2px solid var(--ink); padding-bottom: 16px; }
 h1 { font-size: 22px; margin: 0 0 4px; }
 h2 { font-size: 16px; margin: 32px 0 8px; }
 .dim { color: var(--dim); }
 .small { font-size: 12.5px; }
-.brandmark { font-weight: 700; letter-spacing: .12em; }
+.brandmark { font-weight: 700; letter-spacing: .12em; margin-bottom: 8px; }
+.brandmark svg { height: 32px; width: auto; display: block; }
 .demo-flag { display: inline-block; background: #fff3e0; color: var(--warn); border: 1px solid var(--warn); border-radius: 4px; padding: 2px 8px; font-size: 12px; font-weight: 600; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-top: 20px; }
 .tile { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
@@ -2983,7 +3304,7 @@ td.nobody { color: var(--dim); font-style: italic; }
 </style></head><body><div class="page">
 <header>
   <div>
-    <div class="brandmark">${esc(brand.logoText)}</div>
+    <div class="brandmark">${brand.logoSvg || esc(brand.logoText)}</div>
     <h1>AI search visibility — weekly report #${report.week}</h1>
     <p class="dim" style="margin:0">${esc(id.name)} · ${esc(id.domain)} · ${esc(report.createdAt.slice(0, 10))}
     ${demo ? ' · <span class="demo-flag">ANONYMISED DEMO — real metrics, identity withheld</span>' : ''}</p>
@@ -3077,7 +3398,7 @@ const __DEMO_KEY = 'aureva-demo-db';
 // scorecard, no frozen week-0 snapshot, no decay). Bump this whenever the
 // seeded shape changes: a mismatch clears the stored db so the current bundle
 // re-seeds fresh. (The "Reset demo data" button does the same thing manually.)
-const __SEED_VERSION = 'v1.3';
+const __SEED_VERSION = 'v1.4';
 const __VERSION_KEY = 'aureva-demo-version';
 try {
   if (localStorage.getItem(__VERSION_KEY) !== __SEED_VERSION) {
@@ -3131,7 +3452,7 @@ ${schema}
 <h1>${__esc(post.title)}</h1>${body}${links}${faq}</body></html>`;
 }
 
-function __route(method, url, body) {
+async function __route(method, url, body) {
   const [pathname, qs] = url.split('?');
   const query = new URLSearchParams(qs || '');
   const m = (re) => pathname.match(re);
@@ -3139,6 +3460,24 @@ function __route(method, url, body) {
   try {
     if (pathname === '/api/clients' && method === 'GET') return { status: 200, body: __store.clients() };
     if (pathname === '/api/clients' && method === 'POST') return { status: 201, body: __orch.createClient(__store, body) };
+    // v1.4: integration status — the demo runs with zero credentials, so every
+    // source reports mock (the banner already says everything is simulated)
+    if (pathname === '/api/integrations' && method === 'GET') {
+      return { status: 200, body: { sources: __require('config').integrationStatus({}, __store) } };
+    }
+    // v1.4: manual prompt-week trigger (mock provider — in-browser, no keys)
+    if ((x = m(/^\/api\/clients\/([^/]+)\/prompt-week$/)) && method === 'POST') {
+      const c = __store.getClient(x[1]);
+      if (!c) return { status: 404, body: { error: 'Client not found' } };
+      const history = c.promptRunHistory || [];
+      const week = history.length ? history[history.length - 1].week + 1 : 1;
+      const record = await __orch.runPromptWeek(__store, x[1], week, {});
+      return { status: 200, body: {
+        week: record.week, provider: record.provider, runsPerPrompt: record.runsPerPrompt,
+        promptCount: record.prompts.length, coverage: record.coverage,
+        costEUR: record.costEUR, dataSources: record.sources, storedAt: record.storedAt
+      } };
+    }
     if ((x = m(/^\/api\/clients\/([^/]+)\/profile\/decision$/)) && method === 'POST') {
       return { status: 200, body: __orch.profileDecision(__store, x[1], body.decision, body.note) };
     }
@@ -3205,7 +3544,7 @@ function __route(method, url, body) {
 }
 
 const __realFetch = window.fetch.bind(window);
-window.fetch = function (input, init = {}) {
+window.fetch = async function (input, init = {}) {
   const url = typeof input === 'string' ? input : input.url;
   const rel = url.startsWith('/') ? url : new URL(url, location.href).pathname + new URL(url, location.href).search;
   const pathname = rel.split('?')[0];
@@ -3213,22 +3552,22 @@ window.fetch = function (input, init = {}) {
     return __realFetch(input, init);
   }
   const body = init.body ? JSON.parse(init.body) : {};
-  const r = __route((init.method || 'GET').toUpperCase(), rel, body);
+  const r = await __route((init.method || 'GET').toUpperCase(), rel, body);
   const isJson = !r.type;
   const text = isJson ? JSON.stringify(r.body) : r.body;
-  return Promise.resolve({
+  return {
     ok: r.status < 400, status: r.status, statusText: '',
     json: async () => (isJson ? r.body : JSON.parse(text)),
     text: async () => text
-  });
+  };
 };
 
 // mock-WP links and web-report links open as generated blob pages. When
 // window.open is blocked (embedded webviews, aggressive popup blockers —
 // exactly the environments a sales demo can end up in) the page opens in a
 // full-screen in-page viewer instead, so the flow never dead-ends.
-function __openGenerated(href) {
-  const r = __route('GET', href, {});
+async function __openGenerated(href) {
+  const r = await __route('GET', href, {});
   const blob = new Blob([r.body], { type: r.type || 'text/plain' });
   const url = URL.createObjectURL(blob);
   const win = window.open(url, '_blank');
@@ -3366,6 +3705,9 @@ async function refresh() {
     if (e.status === 401) { state.authed = false; return renderLogin(); }
     throw e;
   }
+  // v1.4: integration status board (source modes, health, never credentials)
+  try { state.integrations = (await api('GET', '/api/integrations')).sources; }
+  catch { state.integrations = null; }
   if (!state.selId && state.clients.length) state.selId = state.clients[0].id;
   render();
 }
@@ -3422,6 +3764,8 @@ window.articleDecide = (aid, d) => act(() => api('POST', `/api/clients/${state.s
 window.visibilityDecide = (aid, d) => act(() => api('POST', `/api/clients/${state.selId}/articles/${aid}/visibility`, { decision: d }),
   d === 'make_visible' ? 'Post is now publicly visible (in navigation)' : 'Post kept hidden (sitemap-only)');
 window.reportDecide = (rid) => act(() => api('POST', `/api/clients/${state.selId}/reports/${rid}/decision`, { decision: 'approve' }), 'Report approved — optimization unlocked');
+window.runPromptWeek = () => act(() => api('POST', `/api/clients/${state.selId}/prompt-week`)
+  .then(r => ({ status: 'PASS', summary: `Prompt week ${r.week} recorded (${r.provider} provider, coverage ${Math.round(r.coverage.rate * 100)}%${r.costEUR ? `, ~€${r.costEUR.toFixed(2)}` : ''}). Run the monitor to fold it into a report.` })));
 window.resolveEsc = (eid, action) => act(() => api('POST', `/api/clients/${state.selId}/escalations/${eid}/resolve`, { action }), `Escalation resolved: ${action}`);
 window.selectClient = (id) => { state.selId = id; state.view = 'client'; state.tab = 'pipeline'; render(); };
 window.setTab = (t) => { state.tab = t; render(); };
@@ -3477,11 +3821,25 @@ window.saveSettings = async (ev) => {
       dropSensitivity: +f.dropSensitivity.value,
       visitorThreshold: +f.visitorThreshold.value,
       visitorWindowDays: +f.visitorWindowDays.value,
-      decayThreshold: +f.decayThreshold.value
+      decayThreshold: +f.decayThreshold.value,
+      runsPerPrompt: +f.runsPerPrompt.value
     },
     reviewMode: f.reviewMode.value,
     simulateRobotsBlock: f.simulateRobotsBlock.checked,
-    simulateWebhookFailure: f.simulateWebhookFailure.checked
+    simulateWebhookFailure: f.simulateWebhookFailure.checked,
+    // v1.4 client-granted credentials — blank fields keep the stored value
+    // (the server merges; secrets are never echoed back to this form)
+    integrations: {
+      gscProperty: f.gscProperty.value.trim(),
+      ga4Property: f.ga4Property.value.trim(),
+      bingApiKey: f.bingApiKey.value.trim(),
+      indexNowKey: f.indexNowKey.value.trim(),
+      wp: {
+        baseUrl: f.wpBaseUrl.value.trim(),
+        user: f.wpUser.value.trim(),
+        appPassword: f.wpAppPassword.value.trim()
+      }
+    }
   }), 'Settings saved');
   return false;
 };
@@ -3604,7 +3962,7 @@ function render() {
   const c = sel();
   if (!c) return;
 
-  const tabs = ['pipeline', 'profile', 'baseline', 'visibility', 'plan', 'content', 'publishing', 'monitoring', 'escalations', 'audit', 'settings'];
+  const tabs = ['pipeline', 'profile', 'baseline', 'visibility', 'plan', 'content', 'publishing', 'monitoring', 'escalations', 'audit', 'integrations', 'settings'];
   const openEsc = c.escalations.filter(e => e.status === 'open').length;
   const pendingNotif = c.notifications ? c.notifications.filter(n => n.status === 'pending').length : 0;
   const profilePending = (c.profile && c.profile.status === 'pending_approval' ? 1 : 0) +
@@ -3674,7 +4032,8 @@ function renderTab(c) {
     pipeline: renderPipeline, profile: renderProfile, baseline: renderBaseline, visibility: renderVisibility,
     plan: renderPlan, content: renderContent,
     publishing: renderPublishing, monitoring: renderMonitoring,
-    escalations: renderEscalations, audit: renderAudit, settings: renderSettings
+    escalations: renderEscalations, audit: renderAudit,
+    integrations: renderIntegrations, settings: renderSettings
   }[state.tab](c);
 }
 
@@ -3918,11 +4277,16 @@ function renderVisibility(c) {
   const base = c.baseline;
   const schemaCov = base ? `${base.pages.filter(p => p.hasSchema).length}/${base.pages.length}` : '—';
 
+  const srcBadge = (ds) => ds === 'live' ? '<span class="badge b-PASS" data-testid="vis-datasource">● live engine data</span>'
+    : ds === 'mixed' ? '<span class="badge b-low" data-testid="vis-datasource">◐ mixed live/simulated</span>'
+    : '<span class="badge b-medium" data-testid="vis-datasource">simulated data</span>';
   return `
     <div class="row" style="align-items:baseline">
       <h2 style="margin:0">Visibility scorecard</h2>
       <span class="dim" data-testid="vis-source">${pt
         ? `current — weekly check #${latest.week}` : 'week-0 baseline snapshot (run the monitor for current data)'}</span>
+      ${srcBadge(pt ? pt.dataSource || 'mock' : 'mock')}
+      <button data-testid="run-prompt-week" onclick="runPromptWeek()">Run prompt week now</button>
     </div>
     <div class="cards" style="margin-top:8px" data-testid="vis-scorecard">
       ${scoreTile('Visibility', pctv(sc.visibility),
@@ -4158,6 +4522,54 @@ function renderAudit(c) {
     </table>`;
 }
 
+// ---------- integrations tab (v1.4) ----------
+
+function renderIntegrations(c) {
+  const sources = state.integrations;
+  const month = new Date().toISOString().slice(0, 7);
+  const ledger = (c.costLedger && c.costLedger[month]) || null;
+  const modeBadge = (s) => s.mode === 'live' ? badge('PASS').replace('>PASS<', '>● live<')
+    : s.mode === 'per-client' ? '<span class="badge b-low">per-client</span>'
+    : '<span class="badge b-medium">mock</span>';
+  const ci = c.integrations || {};
+  const isSet = (v) => !!v && (typeof v !== 'object' || v.configured || Object.values(v).some(x => !!x));
+  const clientRows = [
+    ['GSC property', ci.gscProperty],
+    ['GA4 property', ci.ga4Property],
+    ['Bing Webmaster API key', isSet(ci.bingApiKey) ? '● configured' : null],
+    ['WordPress (Application Password)', ci.wp && ci.wp.baseUrl ? `${ci.wp.baseUrl} (${isSet(ci.wp.appPassword) ? 'credentials set' : 'no password yet'})` : null],
+    ['IndexNow key', isSet(ci.indexNowKey) ? '● configured' : null]
+  ];
+  return `
+    <p class="dim">A source is <strong>live</strong> the moment its credential lands in the environment — mock otherwise,
+    per source (mixed-mode by design). Simulated data is always labelled in the console and reports.</p>
+    <div class="cards" data-testid="integrations-sources">
+      ${(sources || []).map(s => `
+        <div class="card" data-testid="source-${esc(s.id)}">
+          <h3>${esc(s.label)}</h3>
+          <p>${modeBadge(s)}${s.detail ? ` <span class="dim">${esc(s.detail)}</span>` : ''}</p>
+          <p class="dim" style="min-height:0">
+            ${s.lastSuccess ? `last ok: ${esc(String(s.lastSuccess).slice(0, 19).replace('T', ' '))}` : 'no live calls yet'}
+            ${s.lastError ? `<br>⚠ last error: ${esc(s.lastError.detail || '')} (${esc(String(s.lastError.at).slice(0, 16).replace('T', ' '))})` : ''}
+          </p>
+        </div>`).join('') || '<p class="dim">Status unavailable.</p>'}
+    </div>
+    <h2>External data cost — ${esc(c.name)}, ${esc(month)}</h2>
+    ${ledger ? `
+      <p data-testid="cost-month">~€${ledger.total.toFixed(2)} this month <span class="dim">(target: €5–15/client/month all-in — API spec)</span></p>
+      <table style="max-width:420px" data-testid="cost-table"><tr><th>Source</th><th>Est. cost</th></tr>
+      ${Object.entries(ledger.bySource).map(([s, v]) => `<tr><td>${esc(s)}</td><td>€${v.toFixed(3)}</td></tr>`).join('')}
+      </table>` : '<p class="dim" data-testid="cost-empty">No live-API spend recorded for this client this month (mock runs are free).</p>'}
+    <h2>Client-granted access (API spec §8)</h2>
+    <table style="max-width:640px" data-testid="client-integrations">
+      <tr><th>Grant</th><th>Status</th></tr>
+      ${clientRows.map(([label, v]) => `<tr><td>${esc(label)}</td><td>${v ? esc(v) : '<span class="dim">not configured — add in Settings</span>'}</td></tr>`).join('')}
+    </table>
+    <p class="dim">[PLACEHOLDER — Sami writes the client-facing intake copy] What we ask each client at onboarding:
+    add our service-account email to Search Console + GA4, import the property into Bing Webmaster Tools from GSC and
+    generate an API key, and create a WordPress Application Password for the publishing integration.</p>`;
+}
+
 function renderSettings(c) {
   return `
     <form class="panel" onsubmit="return saveSettings(event)">
@@ -4174,6 +4586,8 @@ function renderSettings(c) {
       <input type="number" name="visitorWindowDays" data-testid="set-visitorwindow" value="${c.thresholds.visitorWindowDays}" min="1" max="90">
       <label>Decay watchlist threshold (health 0–100; entry needs 2 consecutive low reports)</label>
       <input type="number" name="decayThreshold" data-testid="set-decaythreshold" value="${c.thresholds.decayThreshold ?? 55}" min="0" max="100">
+      <label>Runs per prompt per engine per week (cost vs confidence — never below 2)</label>
+      <input type="number" name="runsPerPrompt" data-testid="set-runsperprompt" value="${c.thresholds.runsPerPrompt ?? 3}" min="2" max="10">
       <h2>Approval gates</h2>
       <label>Content approval mode</label>
       <select name="reviewMode" data-testid="set-reviewmode">
@@ -4188,6 +4602,27 @@ function renderSettings(c) {
         <input type="checkbox" id="webhookfail" name="simulateWebhookFailure" data-testid="set-webhookfail" ${c.simulateWebhookFailure ? 'checked' : ''}>
         <label for="webhookfail" style="margin:0">Simulate missing publish-confirmation webhook (demo)</label>
       </div>
+      <h2>Client-granted integrations (API spec §8)</h2>
+      ${(() => {
+        const ci = c.integrations || {};
+        const wp = ci.wp || {};
+        const secretPh = (v) => v && (v.configured || typeof v === 'string') ? 'configured — leave blank to keep' : '';
+        return `
+      <label>Google Search Console property (e.g. sc-domain:client.example)</label>
+      <input name="gscProperty" data-testid="set-gscproperty" value="${esc(typeof ci.gscProperty === 'string' ? ci.gscProperty : '')}">
+      <label>GA4 property (e.g. properties/123456)</label>
+      <input name="ga4Property" data-testid="set-ga4property" value="${esc(typeof ci.ga4Property === 'string' ? ci.ga4Property : '')}">
+      <label>Bing Webmaster API key</label>
+      <input name="bingApiKey" data-testid="set-bingkey" type="password" placeholder="${esc(secretPh(ci.bingApiKey))}">
+      <label>IndexNow key</label>
+      <input name="indexNowKey" data-testid="set-indexnowkey" type="password" placeholder="${esc(secretPh(ci.indexNowKey))}">
+      <label>WordPress site URL</label>
+      <input name="wpBaseUrl" data-testid="set-wpurl" value="${esc(typeof wp.baseUrl === 'string' ? wp.baseUrl : '')}" placeholder="https://client-site.example">
+      <label>WordPress user</label>
+      <input name="wpUser" data-testid="set-wpuser" value="${esc(typeof wp.user === 'string' ? wp.user : '')}">
+      <label>WordPress Application Password (not the login password — revocable)</label>
+      <input name="wpAppPassword" data-testid="set-wppassword" type="password" placeholder="${esc(secretPh(wp.appPassword))}">`;
+      })()}
       <h2>Plugin API</h2>
       <p class="dim">API key for the WordPress plugin: <span class="mono" data-testid="api-key">${esc(c.apiKey)}</span></p>
       <p class="dim mono">GET /api/plugin/published · GET /api/plugin/performance · GET /api/plugin/notifications · POST /api/plugin/settings · POST /api/plugin/content-decision · POST /api/plugin/visibility-decision · POST /api/plugin/publish-confirmation</p>
