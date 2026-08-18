@@ -27,6 +27,7 @@ body { background: var(--bg); color: var(--text); font: 14px/1.5 'Sora', 'Inter'
 #client-list a { display: block; padding: 8px 10px; border-radius: 6px; color: var(--text); text-decoration: none; margin-bottom: 4px; border: 1px solid transparent; }
 #client-list a.sel { background: var(--panel2); border-color: var(--line); }
 #client-list a small { display: block; color: var(--dim); }
+#client-list .note-dot { color: var(--accent2); font-size: 10px; vertical-align: middle; }
 
 #main { flex: 1; padding: 20px 26px; max-width: 1100px; }
 h1 { font-size: 20px; margin-bottom: 2px; }
@@ -170,7 +171,8 @@ __define('mock', function (module, exports, require) {
 const { fnv1a, slugify, now, uid } = require('../util');
 
 // v1.3: Claude is the fifth engine (BUILD-v1.3.md item 3).
-const ENGINES = ['chatgpt', 'gemini', 'perplexity', 'google_ai_overview', 'claude'];
+// AUR-A8: Google AI Mode is the sixth — Gemini over live Search, via DataForSEO.
+const ENGINES = ['chatgpt', 'gemini', 'perplexity', 'google_ai_overview', 'claude', 'google_ai_mode'];
 // July 2026 update §2.3: robots.txt must explicitly allow all six.
 const REQUIRED_BOTS = ['GPTBot', 'ClaudeBot', 'PerplexityBot', 'Googlebot', 'Gemini-Bot', 'Bingbot'];
 
@@ -244,17 +246,18 @@ function fanOutQueries(keyword, lang) {
 
 // ---- Onboarding intake adapters (v1.2, SPEC §10.1–10.2) ----------------------
 
-const INTENTS = ['informational', 'comparative', 'transactional', 'local'];
+const INTENTS = ['informational', 'comparative', 'transactional', 'local', 'branded'];
 const PROMPT_RUNS = 3; // runs per prompt per engine per week — never single-run
 
 // v1.3 prompt schema: funnel stage per prompt, heuristic from intent
 // (informational → awareness, comparative → consideration,
-// transactional/local → decision).
+// transactional/local/branded → decision).
 const STAGE_OF_INTENT = {
   informational: 'awareness',
   comparative: 'consideration',
   transactional: 'decision',
-  local: 'decision'
+  local: 'decision',
+  branded: 'decision'
 };
 
 // Site-crawl brand signals mock — in production a crawler + LLM pass over the
@@ -302,6 +305,17 @@ const PROMPT_TEMPLATES = {
       (kw) => `${kw} with short waiting times nearby`,
       (kw) => `who offers ${kw} in my city`,
       (kw, aud) => `${kw} nearby recommended for ${aud}`
+    ],
+    // AUR-A9: branded intent — the only templates that name the client. Their
+    // signature is (brand, kw) / (brand, aud): the brand string is not in scope
+    // here, so the generator loop passes it. Pure-brand templates dedupe to one
+    // prompt across seeds via the generator's seen-set.
+    branded: [
+      (brand) => `what is ${brand} and what do they do`,
+      (brand) => `what do reviews say about ${brand}`,
+      (brand, kw) => `is ${brand} a good choice for ${kw}`,
+      (brand, kw) => `how does ${brand} compare to other providers of ${kw}`,
+      (brand, aud) => `would you recommend ${brand} for ${aud}`
     ]
   },
   nl: {
@@ -332,6 +346,13 @@ const PROMPT_TEMPLATES = {
       (kw) => `${kw} met korte wachttijd in de omgeving`,
       (kw) => `wie biedt ${kw} aan in mijn stad`,
       (kw, aud) => `${kw} in de buurt, aangeraden voor ${aud}`
+    ],
+    branded: [
+      (brand) => `wat is ${brand} en wat doen ze`,
+      (brand) => `wat zeggen reviews over ${brand}`,
+      (brand, kw) => `is ${brand} een goede keuze voor ${kw}`,
+      (brand, kw) => `hoe verhoudt ${brand} zich tot andere aanbieders van ${kw}`,
+      (brand, aud) => `zou je ${brand} aanraden voor ${aud}`
     ]
   }
 };
@@ -347,6 +368,9 @@ function generatePromptSet(client, version) {
   const personaPool = (profile.audiences && profile.audiences.length) ? profile.audiences : null;
   let personaIdx = 0;
   const seeds = client.keywords.length ? client.keywords : [client.niche];
+  // AUR-A9: the brand string for branded prompts — the approved brand profile
+  // first, the onboarding name as fallback.
+  const brand = profile.brandName || client.name;
   const groups = [];
   const seen = new Set();
   for (const intent of INTENTS) {
@@ -363,9 +387,10 @@ function generatePromptSet(client, version) {
         region: null
       });
     };
-    for (const kw of seeds) for (const tpl of templates.slice(0, 4)) add(tpl(kw));
+    const isBranded = intent === 'branded';
+    for (const kw of seeds) for (const tpl of templates.slice(0, 4)) add(isBranded ? tpl(brand, kw) : tpl(kw));
     const audTpl = templates[4];
-    for (const aud of audiences) for (const kw of seeds.slice(0, 2)) add(audTpl(kw, aud));
+    for (const aud of audiences) for (const kw of seeds.slice(0, 2)) add(isBranded ? audTpl(brand, aud) : audTpl(kw, aud));
     groups.push({ intent, prompts });
   }
   // clamp to the 40–100 band: pad with niche-level prompts, trim overflow evenly
@@ -374,7 +399,8 @@ function generatePromptSet(client, version) {
   while (total < 40) {
     const g = groups[pad % groups.length];
     const tpl = PROMPT_TEMPLATES[lang][g.intent][pad % 4];
-    const text = `${tpl(client.niche)} (${++pad})`;
+    // a padded branded prompt must still name the brand, never the bare niche
+    const text = `${g.intent === 'branded' ? tpl(brand, client.niche) : tpl(client.niche)} (${++pad})`;
     g.prompts.push({
       id: uid('pr'), text, language: lang,
       stage: STAGE_OF_INTENT[g.intent],
@@ -1020,8 +1046,9 @@ __define('config', function (module, exports, require) {
 
 const fs = require('fs');
 
-// Engine → which env credential turns it live. google_ai_overview has no
-// first-party API and rides on DataForSEO (API spec §2.1/§6).
+// Engine → which env credential turns it live. google_ai_overview and
+// google_ai_mode have no first-party API and ride on DataForSEO (API spec
+// §2.1/§6; AUR-A8).
 const ENGINE_KEYS = {
   chatgpt: 'AUREVA_OPENAI_KEY',
   claude: 'AUREVA_ANTHROPIC_KEY',
@@ -1030,7 +1057,7 @@ const ENGINE_KEYS = {
 };
 
 function engineKey(engine, env = process.env) {
-  if (engine === 'google_ai_overview') return dataforseo(env) ? 'dataforseo' : null;
+  if (engine === 'google_ai_overview' || engine === 'google_ai_mode') return dataforseo(env) ? 'dataforseo' : null;
   const name = ENGINE_KEYS[engine];
   return (name && env[name]) || null;
 }
@@ -1095,7 +1122,8 @@ function integrationStatus(env = process.env, store = null) {
     claude: 'Claude (Anthropic Messages + web_search)',
     gemini: 'Gemini (Search grounding)',
     perplexity: 'Perplexity (sonar)',
-    google_ai_overview: 'Google AI Overview (via DataForSEO SERP)'
+    google_ai_overview: 'Google AI Overview (via DataForSEO SERP)',
+    google_ai_mode: 'Google AI Mode (Gemini + live Search, via DataForSEO SERP)'
   };
   const rows = Object.keys(engineLabel).map(e =>
     row(e, engineLabel[e], 'engine', engineMode(e, env)));
@@ -1261,9 +1289,37 @@ function liveProvider(providerConfig = {}) {
   const env = providerConfig.env || process.env;
   const { fetchFn = globalThis.fetch, answers = null, sleep } = providerConfig;
   const windowCache = new Map(); // `${engine}|${prompt}|${week}` → observation
+  const prefetch = new Map(); // `${engine}|${prompt}|${week}` → raw result | { error }
 
   return {
     id: 'live',
+    // AUR-B5: batch-capable engines (Standard-queue transports) take the whole
+    // prompt set up front — post all tasks, poll them as a set — so query()
+    // below reads a prefetched result instead of waiting one ~5-minute queue
+    // turnaround per prompt. Deterministic-per-window engines post one task
+    // per prompt (one task IS the week for them); a sampled batch engine
+    // (google_ai_mode, AUR-A8) posts one task per (prompt, run), keyed by
+    // runIdx — each run is a fresh generation, but the tasks still queue as a
+    // set. A wholesale batch failure lands as per-prompt error entries — the
+    // week still completes with error observations.
+    async warm(promptTexts, ctx) {
+      const texts = [...new Set(promptTexts)];
+      const runs = ctx.runsPerPrompt || 1;
+      for (const [id, mod] of Object.entries(engines)) {
+        if (!mod.queryBatch || !mod.isConfigured(env)) continue;
+        const sampled = !mod.deterministicPerWindow;
+        const batch = sampled ? texts.flatMap(t => Array(runs).fill(t)) : texts;
+        let results;
+        try {
+          results = await mod.queryBatch(batch, { env, fetchFn, sleep });
+        } catch (err) {
+          results = batch.map(() => ({ error: err.message }));
+        }
+        batch.forEach((t, i) => prefetch.set(
+          sampled ? `${id}|${t}|w${ctx.week}|r${i % runs}` : `${id}|${t}|w${ctx.week}`,
+          results[i]));
+      }
+    },
     async query(engine, promptText, ctx) {
       const mod = engines[engine];
       if (!mod || !mod.isConfigured(env)) return mockObservation(engine, promptText, ctx);
@@ -1273,11 +1329,18 @@ function liveProvider(providerConfig = {}) {
         // identical answer, already stored and paid for once
         return { ...windowCache.get(cacheKey), costEUR: 0 };
       }
-      let res;
-      try {
-        res = await mod.query(promptText, { env, fetchFn, sleep });
-      } catch (err) {
-        return { error: err.message, source: 'live', answerRef: null };
+      let res = prefetch.get(mod.deterministicPerWindow ? cacheKey : `${cacheKey}|r${ctx.runIdx}`);
+      if (res && res.error) {
+        // entries stay in the map: every run of a failed batch slot reads the
+        // same error rather than re-posting a task per run
+        return { error: res.error, source: 'live', answerRef: null };
+      }
+      if (!res) {
+        try {
+          res = await mod.query(promptText, { env, fetchFn, sleep });
+        } catch (err) {
+          return { error: err.message, source: 'live', answerRef: null };
+        }
       }
       const parsed = extractObservation(res, ctx.client);
       const answerRef = answers ? answers.append(ctx.client.id, ctx.week, {
@@ -1291,6 +1354,7 @@ function liveProvider(providerConfig = {}) {
         costEUR: res.costEUR || 0,
         parsed: {
           mentioned: parsed.mentioned, cited: parsed.cited, citedUrl: parsed.citedUrl,
+          citedCompetitor: parsed.citedCompetitor,
           position: parsed.position, competitors: parsed.competitors,
           sentiment: parsed.sentiment, claims: parsed.claims
         }
@@ -1299,6 +1363,11 @@ function liveProvider(providerConfig = {}) {
       const observation = {
         mentioned: parsed.mentioned,
         cited: parsed.cited,
+        // AUR-C1/C2: which client URL and which competitor the answer cited —
+        // the hot fields the citation matrix and query ownership derive from
+        // (the full source list stays cold)
+        citedUrl: parsed.citedUrl || null,
+        citedCompetitor: parsed.citedCompetitor || null,
         position: parsed.position,
         insteadOf: !parsed.mentioned && firstCompetitor ? `competitor:${firstCompetitor}` : null,
         answerRef,
@@ -1321,6 +1390,13 @@ async function runWeek(client, week, provider = mockProvider()) {
     const e = new Error('No approved prompt set to run'); e.status = 400; throw e;
   }
   const runsPerPrompt = (client.thresholds && client.thresholds.runsPerPrompt) || RUNS_PER_PROMPT;
+  // AUR-B5: hand batch-capable providers the full prompt list before the loop
+  // so Standard-queue engines post every task up front and poll them as a set
+  if (provider.warm) {
+    const texts = [];
+    for (const group of client.promptSet.groups) for (const prompt of group.prompts) texts.push(prompt.text);
+    await provider.warm(texts, { client, week, runsPerPrompt });
+  }
   const prompts = [];
   let observed = 0, total = 0, costEUR = 0;
   const costByEngine = {};
@@ -1417,21 +1493,31 @@ function resolveAppearance(client, promptText, engine, week) {
 }
 
 // Which data fed a stored week — labels the console/report honestly (a hard
-// v1.4 ground rule: simulated data is always marked as such).
-function weekDataSource(client, week) {
+// v1.4 ground rule: simulated data is always marked as such). An error run
+// counts as mock: the resolvers fall back to the mock for it, so its numbers
+// ARE simulated — a week where an engine errored out must never read 'live'
+// (AUR-H2).
+function engineDataSources(client, week) {
   const rec = (client.promptRunHistory || []).find(r => r.week === week);
-  if (!rec) return 'mock';
-  let live = 0, mocked = 0;
-  for (const p of rec.prompts) {
-    for (const e of Object.keys(p.engines)) {
-      for (const o of p.engines[e].runs) {
-        if (o.error) continue;
-        if (o.source === 'live') live++; else mocked++;
+  const out = {};
+  for (const e of mock.ENGINES) {
+    let live = 0, mocked = 0;
+    for (const p of (rec ? rec.prompts : [])) {
+      const cell = p.engines[e];
+      for (const o of (cell ? cell.runs : [])) {
+        if (o.error || o.source !== 'live') mocked++; else live++;
       }
     }
+    out[e] = live && mocked ? 'mixed' : live ? 'live' : 'mock';
   }
-  if (live && mocked) return 'mixed';
-  return live ? 'live' : 'mock';
+  return out;
+}
+
+function weekDataSource(client, week) {
+  const modes = Object.values(engineDataSources(client, week));
+  const anyLive = modes.some(m => m !== 'mock');
+  const anyMock = modes.some(m => m !== 'live');
+  return anyLive && anyMock ? 'mixed' : anyLive ? 'live' : 'mock';
 }
 
 // ---- Reparse ----------------------------------------------------------------
@@ -1455,6 +1541,8 @@ function reparseWeek(client, week, answers) {
       if (obs !== matched && obs.answerRef !== matched.answerRef) continue;
       obs.mentioned = parsed.mentioned;
       obs.cited = parsed.cited;
+      obs.citedUrl = parsed.citedUrl || null;
+      obs.citedCompetitor = parsed.citedCompetitor || null;
       obs.position = parsed.position;
       obs.insteadOf = !parsed.mentioned && firstCompetitor ? `competitor:${firstCompetitor}` : null;
       delete obs.error;
@@ -1465,7 +1553,7 @@ function reparseWeek(client, week, answers) {
 }
 
 module.exports = {
-  runWeek, resolveRun, resolveAppearance, weekDataSource, reparseWeek,
+  runWeek, resolveRun, resolveAppearance, weekDataSource, engineDataSources, reparseWeek,
   mockProvider, liveProvider, RUNS_PER_PROMPT
 };
 
@@ -1773,16 +1861,27 @@ function baseline(client) {
 // client-facing scorecard (Visibility, Link Rate) and Share of Voice.
 // Used by Monitor every week AND captured once, frozen, as
 // client.baseline.promptRun when the prompt set is approved.
+//
+// AUR-A9: branded prompts (the ones naming the client) are their own segment
+// with their own denominator. The brand appears in a branded prompt almost by
+// definition, so folding them into Visibility, per-engine rates or Share of
+// Voice would mechanically inflate every headline number the week the branded
+// intent ships — and the frozen baseline was captured on the unbranded set.
+// scorecard.visibility/linkRate/perEngine and shareOfVoice therefore stay
+// unbranded-only (comparable across the change); scorecard.branded carries
+// the branded segment.
 function appearanceSnapshot(client, week) {
   const competitors = (client.competitors || []).map(c => String(c).replace(/^https?:\/\//, ''));
   const rows = [];
   let total = 0, appearedPrompts = 0, linkedPrompts = 0;
+  let brandedTotal = 0, brandedAppeared = 0, brandedLinked = 0;
   const eng = {};
   for (const e of mock.ENGINES) eng[e] = { appeared: 0, linked: 0, clientCells: 0, competitorCells: 0 };
 
   for (const group of client.promptSet.groups) {
+    const branded = group.intent === 'branded';
     for (const prompt of group.prompts) {
-      total++;
+      if (branded) brandedTotal++; else total++;
       const engines = {};
       let app = false, lnk = false;
       for (const e of mock.ENGINES) {
@@ -1792,14 +1891,14 @@ function appearanceSnapshot(client, week) {
         for (const d of competitors) {
           const ca = mock.competitorAppearance(client, d, prompt.text, e, week);
           cell.competitors[d] = ca;
-          if (ca) eng[e].competitorCells++;
+          if (ca && !branded) eng[e].competitorCells++;
         }
         engines[e] = cell;
-        if (cell.appeared) { app = true; eng[e].appeared++; eng[e].clientCells++; }
-        if (cell.linked) { lnk = true; eng[e].linked++; }
+        if (cell.appeared) { app = true; if (!branded) { eng[e].appeared++; eng[e].clientCells++; } }
+        if (cell.linked) { lnk = true; if (!branded) eng[e].linked++; }
       }
-      if (app) appearedPrompts++;
-      if (lnk) linkedPrompts++;
+      if (app) { if (branded) brandedAppeared++; else appearedPrompts++; }
+      if (lnk) { if (branded) brandedLinked++; else linkedPrompts++; }
       rows.push({
         promptId: prompt.id, prompt: prompt.text,
         stage: prompt.stage || null, intent: group.intent, engines
@@ -1810,6 +1909,11 @@ function appearanceSnapshot(client, week) {
   const scorecard = {
     visibility: total ? appearedPrompts / total : 0,
     linkRate: appearedPrompts ? linkedPrompts / appearedPrompts : 0,
+    branded: {
+      promptCount: brandedTotal,
+      visibility: brandedTotal ? brandedAppeared / brandedTotal : 0,
+      linkRate: brandedAppeared ? brandedLinked / brandedAppeared : 0
+    },
     perEngine: {}
   };
   const shareOfVoice = { overall: 0, perEngine: {} };
@@ -1826,17 +1930,45 @@ function appearanceSnapshot(client, week) {
   }
   shareOfVoice.overall = (clientCells + competitorCells) ? clientCells / (clientCells + competitorCells) : 0;
 
-  return { week, capturedAt: now(), scorecard, shareOfVoice, rows };
+  // AUR-H5: provenance of the week this snapshot resolved from. Week 0 is
+  // never run, so the frozen baseline anchor reads 'mock' unless a live
+  // week 0 was actually stored — and every surface rendering it must say so.
+  return { week, capturedAt: now(), dataSource: promptRunner.weekDataSource(client, week), scorecard, shareOfVoice, rows };
 }
 
 // ---- Agent 1: Research -------------------------------------------------------
-function research(client) {
+
+// AUR-B4: the candidate keywords research works from. One list shared with the
+// scheduler's DataForSEO producer, so the weekly pull prices exactly the
+// keywords research will generate. The strings are template-derived (real
+// logic); only the volume/competition/cpc figures on them are invented.
+function keywordCandidates(client) {
   const keywords = [];
   for (const seed of client.keywords) {
     keywords.push(...mock.expandKeywords(seed, langOf(client)));
     keywords.push(...mock.autocomplete(seed, langOf(client)));
   }
   keywords.push(...mock.competitorGaps(client.competitors, client.niche, langOf(client)));
+  return keywords;
+}
+
+function research(client) {
+  const keywords = keywordCandidates(client);
+  // live seam (AUR-B4): the weekly DataForSEO pull fills client.keywordsCache;
+  // real volume/competition/cpc overlay per keyword, the mock's invented
+  // figures cover whatever DataForSEO could not price. The long-tail sort
+  // below ranks on whatever landed here.
+  const priced = (client.keywordsCache && client.keywordsCache.rows) || {};
+  const generated = keywords.length;
+  let livePriced = 0;
+  for (const k of keywords) {
+    const row = priced[k.keyword];
+    if (!row) continue;
+    livePriced++;
+    k.volume = row.volume;
+    k.competition = row.competition;
+    k.cpc = row.cpc;
+  }
 
   // gaps fed back from Monitor/Optimize — the loop never stops. Citation
   // whitespace (queries where no one is cited) is the cheapest win and is
@@ -1901,6 +2033,9 @@ function research(client) {
     version: (client.plan ? client.plan.version : 0) + 1,
     createdAt: now(),
     status: 'pending_approval',
+    // AUR-H1 discipline: which source priced the generated keywords — the plan
+    // renderer labels from this stamp, and a missing stamp reads as simulated
+    dataSource: livePriced === 0 ? 'mock' : livePriced === generated ? 'live' : 'mixed',
     keywords,
     clusters,
     prioritizedArticles: prioritized,
@@ -1925,6 +2060,7 @@ function research(client) {
     summary: `Content plan v${client.plan.version}: ${keywords.length} keywords, ` +
       `${clusters.length} clusters, ${prioritized.length} prioritized articles ` +
       `(${consumedGaps} gap keywords fed back), ${contradictions.length} corpus contradictions flagged. ` +
+      (livePriced > 0 ? `Volume/competition from DataForSEO (${livePriced}/${generated} keywords). ` : '') +
       'Pending specialist approval.' + promptNote
   };
 }
@@ -2175,40 +2311,108 @@ function publish(client) {
 // ---- Agent 6: Monitor ------------------------------------------------------------
 function monitor(client) {
   const published = client.articles.filter(a => a.publishedUrl);
-  if (!published.length) {
-    return { agent: 'monitor', status: 'FAIL', summary: 'Nothing published to monitor yet.' };
+  // Measurement-first launch: an approved prompt set is enough to monitor —
+  // clients on the measurement tier have real weekly data and zero published
+  // articles. Publish tracking is the optional part, not the measurement.
+  const measuring = client.promptSet && client.promptSet.status === 'approved';
+  if (!published.length && !measuring) {
+    return { agent: 'monitor', status: 'FAIL', summary: 'Nothing published and no approved prompt set to measure yet.' };
   }
   client.monitorRuns += 1;
   const run = client.monitorRuns;
   const prev = client.reports[client.reports.length - 1] || null;
 
-  // live seam (v1.4): a nightly GSC pull fills client.gscCache; the mock
-  // covers every keyword the cache doesn't
-  const gscRows = (client.gscCache && client.gscCache.queries) || [];
+  // live seam (v1.4, hardened by AUR-H2): a nightly GSC pull fills
+  // client.gscCache. Once a pull has run, absence IS the measurement — a
+  // keyword GSC returned no row for has zero recorded impressions (a
+  // brand-new domain has no history at all), never a mock number. The mock
+  // covers only clients whose GSC has never been pulled.
+  const gscCache = client.gscCache || null;
+  const gscRows = (gscCache && gscCache.queries) || [];
   const keywords = client.plan.prioritizedArticles.map(k => {
     const live = gscRows.find(r => r.keyword === k.keyword);
-    return live
-      ? { keyword: k.keyword, impressions: live.impressions, clicks: live.clicks, position: live.position }
+    if (live) return { keyword: k.keyword, impressions: live.impressions, clicks: live.clicks, position: live.position };
+    return gscCache
+      ? { keyword: k.keyword, impressions: 0, clicks: 0, position: null }
       : mock.gscKeywordData(client.id, k.keyword, run);
   });
-  const firstSlug = [...published].sort((a, b) => a.slug.localeCompare(b.slug))[0].slug;
-  // hash basis is the DOMAIN, not the random client id — SPEC §8 promises
-  // reproducible runs, and the decay watchlist (v1.3) depends on it
+  const firstSlug = published.length ? [...published].sort((a, b) => a.slug.localeCompare(b.slug))[0].slug : null;
+  // AUR-C1: the citation matrix derives from stored prompt runs — every live
+  // answer records the client URL it cited; match those against published
+  // article slugs. Per engine: an engine with live runs this week gets real
+  // matches (an empty week is an honest all-false), an engine without keeps
+  // the mock fallback. The hash basis of that mock is the DOMAIN, not the
+  // random client id — SPEC §8 promises reproducible runs, and the decay
+  // watchlist (v1.3) depends on it.
+  const weekRec = (client.promptRunHistory || []).find(r => r.week === run);
+  const liveCitedUrls = {};
+  for (const e of mock.ENGINES) {
+    let sawLive = false;
+    const urls = [];
+    for (const p of (weekRec ? weekRec.prompts : [])) {
+      const cell = p.engines[e];
+      if (!cell) continue;
+      for (const o of cell.runs) {
+        if (o.error || o.source !== 'live') continue;
+        sawLive = true;
+        if (o.citedUrl) urls.push(o.citedUrl);
+      }
+    }
+    liveCitedUrls[e] = sawLive ? urls : null; // null = no live run → mock fallback
+  }
+  const urlMatchesSlug = (url, slug) => {
+    const path = String(url).split('?')[0];
+    return path === `/${slug}` || path.endsWith(`/${slug}`) || path.endsWith(`/${slug}/`);
+  };
   const citations = published.map(a => {
     const engines = {};
     for (const e of mock.ENGINES) {
-      engines[e] = mock.citationCheck(client.domain, a.slug, e, run, a.slug === firstSlug);
+      engines[e] = liveCitedUrls[e]
+        ? liveCitedUrls[e].some(u => urlMatchesSlug(u, a.slug))
+        : mock.citationCheck(client.domain, a.slug, e, run, a.slug === firstSlug);
     }
     return { articleId: a.id, slug: a.slug, title: a.title, engines };
   });
+  const liveEngines = mock.ENGINES.filter(e => liveCitedUrls[e]).length;
+  const citationsSource = liveEngines === 0 ? 'mock' : liveEngines === mock.ENGINES.length ? 'live' : 'mixed';
 
   // Query-citation ownership: per query per engine — client, competitor, or
   // NOBODY. Queries nobody owns are citation whitespace: the cheapest wins.
+  // AUR-C2: derived from stored runs. A query joins the prompts built from
+  // the same seed keyword; per engine, a live citation of the client wins,
+  // else a cited competitor, else NOBODY — real whitespace. An engine with
+  // no live run on the matching prompts keeps the labelled mock.
+  const seedOf = (text) => {
+    const lower = String(text).toLowerCase();
+    return client.keywords.find(s => lower.includes(s.toLowerCase())) || null;
+  };
+  const ownerBySeed = {}; // seed → engine → { live, owner }
+  for (const p of (weekRec ? weekRec.prompts : [])) {
+    const seed = seedOf(p.text);
+    if (!seed) continue;
+    const perEngine = ownerBySeed[seed] || (ownerBySeed[seed] = {});
+    for (const e of Object.keys(p.engines)) {
+      for (const o of p.engines[e].runs) {
+        if (o.error || o.source !== 'live') continue;
+        const cell = perEngine[e] || (perEngine[e] = { live: true, owner: null });
+        if (o.cited) cell.owner = 'client';
+        else if (o.citedCompetitor && cell.owner !== 'client') cell.owner = `competitor:${o.citedCompetitor}`;
+      }
+    }
+  }
+  let qcLive = 0, qcTotal = 0;
   const queryCitations = client.plan.prioritizedArticles.map(k => {
+    const seed = seedOf(k.keyword);
+    const perEngine = (seed && ownerBySeed[seed]) || {};
     const engines = {};
-    for (const e of mock.ENGINES) engines[e] = mock.queryCitationOwner(client, k.keyword, e, run);
+    for (const e of mock.ENGINES) {
+      qcTotal++;
+      if (perEngine[e]) { qcLive++; engines[e] = perEngine[e].owner; }
+      else engines[e] = mock.queryCitationOwner(client, k.keyword, e, run);
+    }
     return { query: k.keyword, engines };
   });
+  const queryCitationsSource = qcLive === 0 ? 'mock' : qcLive === qcTotal ? 'live' : 'mixed';
   const whitespace = queryCitations
     .filter(row => Object.values(row.engines).filter(v => v === null).length >= 2)
     .map(row => ({ query: row.query, type: 'whitespace' }));
@@ -2242,12 +2446,24 @@ function monitor(client) {
   // Hidden-post traffic thresholds (July update §2.1): when a hidden article
   // crosses the visitor threshold, notify the client so they can choose to
   // make it publicly visible. One notification per article.
+  // AUR-C3: the count is real GA4 page-level sessions (nightly pull, the
+  // client's visitor window) or null — with no GA4 the check is skipped,
+  // never simulated: this number drives a real client decision.
+  const ga4Pages = client.ga4Cache && client.ga4Cache.pages ? client.ga4Cache.pages : null;
+  const sessionsForSlug = (sessions, slug) => {
+    let total = 0;
+    for (const [path, n] of Object.entries(sessions)) {
+      if (path === `/${slug}` || path.endsWith(`/${slug}`) || path.endsWith(`/${slug}/`)) total += n;
+    }
+    return total;
+  };
   const visitors = published.map(a => ({
     articleId: a.id, slug: a.slug,
-    visitors: mock.articleVisitors(client.id, a.slug, run)
+    visitors: ga4Pages ? sessionsForSlug(ga4Pages.sessions, a.slug) : null
   }));
   const newNotifications = [];
   for (const v of visitors) {
+    if (v.visitors == null) continue;
     const art = client.articles.find(a => a.id === v.articleId);
     if (!art || art.visibility !== 'hidden') continue;
     if (v.visitors < client.thresholds.visitorThreshold) continue;
@@ -2274,7 +2490,7 @@ function monitor(client) {
   const decayThreshold = client.thresholds.decayThreshold != null ? client.thresholds.decayThreshold : 55;
   const decayScores = published.map(a => {
     const row = citations.find(r => r.articleId === a.id);
-    const scored = decayScore(client, a, { run, citationRow: row, prevReport: prev, keywords, visitors });
+    const scored = decayScore(client, a, { run, citationRow: row, prevReport: prev, keywords, visitors, queryCitations });
     return { articleId: a.id, slug: a.slug, ...scored };
   });
   const watchlist = [];
@@ -2288,11 +2504,35 @@ function monitor(client) {
     }
   }
 
+  // AUR-H1: which source fed each block — the client-facing renderers label
+  // from this stamp, and a missing stamp reads as simulated. The hardcoded
+  // 'mock' entries are the structural truth today: those blocks call mock.*
+  // directly (AUR-C1/C2 flip them when derivation from prompt runs lands).
+  // promptTracking carries its own dataSource and is not duplicated here.
+  // AUR-B1: when real GSC data feeds this report, state its window — GSC lags
+  // 2–3 days and nothing we render may claim fresher. A pulled cache makes the
+  // whole table live (found rows are GSC's numbers, missing rows are real
+  // zeros), so the stamp is per-pull, not per-row.
+  const gscWindow = gscCache && gscCache.window ? gscCache.window : null;
+  const searchConsoleSource = gscCache ? 'live' : 'mock';
+  // decay derives from citations, GSC keywords and page traffic — its label is
+  // the worst of its inputs, never better than what actually fed it
+  const decayInputs = [citationsSource, searchConsoleSource, queryCitationsSource, ga4Pages ? 'live' : 'mock'];
+  const sources = {
+    searchConsole: searchConsoleSource,
+    ga4: client.ga4Cache && client.ga4Cache.summary ? 'live' : 'mock',
+    citations: citationsSource,
+    queryCitations: queryCitationsSource,
+    decay: decayInputs.every(m => m === 'live') ? 'live' : decayInputs.every(m => m === 'mock') ? 'mock' : 'mixed'
+  };
+
   const report = {
     id: uid('rep'),
     week: run,
     createdAt: now(),
     status: 'pending_review',
+    sources,
+    ...(gscWindow ? { gscWindow } : {}),
     keywords,
     // live seam (v1.4): nightly GA4 pull fills client.ga4Cache (incl. the AI
     // referral channel); mock otherwise
@@ -2321,8 +2561,11 @@ function monitor(client) {
     : '';
   return {
     agent: 'monitor', status: 'NEEDS_REVIEW',
-    summary: `Weekly report #${run}: ${citedCount}/${citations.length * mock.ENGINES.length} engine citations, ` +
-      `${droppedPages.length} dropped pages flagged, ${whitespace.length} whitespace queries (nobody cited), ` +
+    summary: `Weekly report #${run}: ` +
+      (published.length
+        ? `${citedCount}/${citations.length * mock.ENGINES.length} engine citations, ${droppedPages.length} dropped pages flagged, `
+        : 'measurement only (nothing published yet), ') +
+      `${whitespace.length} whitespace queries (nobody cited), ` +
       `${report.newGaps.length} new gaps, ${newNotifications.length} traffic-threshold notifications.${ptBit}${decayBit} Pending specialist review.`
   };
 }
@@ -2362,7 +2605,8 @@ function decayScore(client, article, ctx) {
   // 3. Traffic trend over the rolling window.
   const visNow = ctx.visitors.find(v => v.articleId === article.id);
   const visPrev = ctx.prevReport && (ctx.prevReport.visitors || []).find(v => v.articleId === article.id);
-  if (visNow && visPrev && visNow.visitors < visPrev.visitors) {
+  // null = traffic unknown (no GA4), which is not a downward trend
+  if (visNow && visPrev && visNow.visitors != null && visPrev.visitors != null && visNow.visitors < visPrev.visitors) {
     pen(10, 'traffic-trend', `${visPrev.visitors} → ${visNow.visitors} weekly visitors`);
   }
 
@@ -2377,10 +2621,13 @@ function decayScore(client, article, ctx) {
   if (stale) pen(Math.min(stale * 4, 12), 'factual-staleness', `${stale} fact(s) dated before ${staleBefore}`);
 
   // 6. Competitive displacement: a competitor is now cited on the article's
-  //    query on engines where the article itself is not.
+  //    query on engines where the article itself is not. Reads the derived
+  //    ownership rows (AUR-C2) — byte-consistent with the old direct mock
+  //    call when the week has no live runs.
+  const qRow = (ctx.queryCitations || []).find(r => r.query === article.keyword);
   const displaced = mock.ENGINES.filter(e => {
     if (row.engines[e]) return false;
-    const owner = mock.queryCitationOwner(client, article.keyword, e, ctx.run);
+    const owner = qRow ? qRow.engines[e] : null;
     return owner && owner !== 'client';
   });
   if (displaced.length) {
@@ -2456,11 +2703,20 @@ function trackPrompts(client, run) {
   }
   // Frozen week-0 anchor for the client-facing metrics (v1.3 items 1+4):
   // captured once at prompt-set approval, never recomputed.
+  // AUR-A9 decision: baselines are NOT re-anchored for the branded segment. A
+  // baseline frozen before branded prompts existed has no branded block
+  // (branded: null) and the report says so — the segment gets its anchor only
+  // when a prompt set with branded prompts is approved. The unbranded numbers
+  // stay comparable because Visibility's denominator never included branded.
   const baselineScorecard = client.baseline && client.baseline.promptRun
     ? {
         visibility: client.baseline.promptRun.scorecard.visibility,
         linkRate: client.baseline.promptRun.scorecard.linkRate,
-        shareOfVoice: client.baseline.promptRun.shareOfVoice.overall
+        shareOfVoice: client.baseline.promptRun.shareOfVoice.overall,
+        branded: client.baseline.promptRun.scorecard.branded || null,
+        // AUR-H5: the anchor's own provenance travels with it. An anchor
+        // frozen before the stamp existed reads simulated, never measured.
+        dataSource: client.baseline.promptRun.dataSource || 'mock'
       }
     : null;
 
@@ -2471,6 +2727,9 @@ function trackPrompts(client, run) {
     // v1.4 honesty label: which data fed this week — 'live', 'mixed' or 'mock'
     // (simulated). Surfaces in the console; mock stays clearly marked.
     dataSource: promptRunner.weekDataSource(client, run),
+    // AUR-H2: the same truth per engine, so a mixed week can say WHICH
+    // engine's numbers are simulated (e.g. an engine that errored all week).
+    perEngineSource: promptRunner.engineDataSources(client, run),
     weekly,
     rolling,
     baseline,
@@ -2550,7 +2809,7 @@ function optimize(client) {
 module.exports = {
   baseline, research, brief, writer, scoreArticle, contradictionCheck,
   publish, monitor, optimize, RUBRIC_WEIGHTS,
-  appearanceSnapshot, decayScore
+  appearanceSnapshot, decayScore, keywordCandidates
 };
 
 });
@@ -2605,6 +2864,9 @@ function draftProfile(input, version) {
     status: deep ? 'pending_approval' : 'approved',
     autoApproved: !deep,
     companyDescription: input.companyDescription || `${input.name} — ${input.niche}`,
+    // AUR-A9: the string branded prompts ask about — e.g. a trading name that
+    // differs from the legal name. The generator falls back to client.name.
+    brandName: input.brandName || null,
     toneOfVoice: input.toneOfVoice || input.brandVoice || 'professional and clear',
     brandRules: Array.isArray(input.brandRules) ? input.brandRules : [],
     languages,
@@ -2653,6 +2915,7 @@ function createClient(store, input) {
     briefs: [],
     articles: [],
     reports: [],
+    notes: [],                // portal note channel (AUR-J1) — client questions + staff replies
     notifications: [],
     escalations: [],
     optimizationLog: [],
@@ -2900,7 +3163,8 @@ function promptSetDecision(store, clientId, decision) {
     audit(client, 'system', 'INFO',
       `Week-0 prompt appearance snapshot captured into the frozen baseline ` +
       `(Visibility ${Math.round(client.baseline.promptRun.scorecard.visibility * 100)}%, ` +
-      `Link Rate ${Math.round(client.baseline.promptRun.scorecard.linkRate * 100)}%).`);
+      `Link Rate ${Math.round(client.baseline.promptRun.scorecard.linkRate * 100)}%` +
+      `${client.baseline.promptRun.dataSource === 'live' ? ', measured from a stored week-0 run' : ', simulated estimate — no live week-0 run'}).`);
   }
   audit(client, 'human', 'INFO', decision === 'approve'
     ? `Specialist approved prompt set v${client.promptSet.version} (${client.promptSet.total} prompts). ` +
@@ -3005,6 +3269,52 @@ function resolveEscalation(store, clientId, escalationId, action) {
   return esc;
 }
 
+// ---------------- portal note channel (AUR-J1) ----------------
+// The report promises "leave a note in your portal — it reaches a person, not
+// a mailbox". These three functions are that promise: note in → unread in the
+// operator queue → staff reply back in the portal.
+
+function noteText(input) {
+  if (typeof input !== 'string' || !input.trim() || input.trim().length > 2000) {
+    const e = new Error('Note text must be a non-empty string of at most 2000 characters');
+    e.status = 400;
+    throw e;
+  }
+  return input.trim();
+}
+
+function addPortalNote(store, clientId, text) {
+  const client = store.getClient(clientId);
+  const note = { id: uid('note'), text: noteText(text), createdAt: now(), status: 'unread', reply: null };
+  client.notes.push(note);
+  audit(client, 'portal', 'NEEDS_REVIEW', `Client note received: "${note.text.slice(0, 80)}${note.text.length > 80 ? '…' : ''}"`);
+  // production: push notification to the relevant Aureva team member here (E4)
+  store.save();
+  return note;
+}
+
+function getNote(store, clientId, noteId) {
+  const client = store.getClient(clientId);
+  const note = client && client.notes.find(n => n.id === noteId);
+  if (!note) { const e = new Error('Note not found'); e.status = 404; throw e; }
+  return { client, note };
+}
+
+function readPortalNote(store, clientId, noteId) {
+  const { note } = getNote(store, clientId, noteId);
+  if (note.status === 'unread') { note.status = 'read'; note.readAt = now(); store.save(); }
+  return note;
+}
+
+function replyPortalNote(store, clientId, noteId, text) {
+  const { client, note } = getNote(store, clientId, noteId);
+  note.reply = { text: noteText(text), createdAt: now() };
+  note.status = 'answered';
+  audit(client, 'human', 'INFO', `Replied to client note: "${note.text.slice(0, 80)}${note.text.length > 80 ? '…' : ''}"`);
+  store.save();
+  return note;
+}
+
 function updateSettings(store, clientId, input) {
   const client = store.getClient(clientId);
   if (!client) { const e = new Error('Client not found'); e.status = 404; throw e; }
@@ -3072,7 +3382,11 @@ async function runPromptWeek(store, clientId, week, opts = {}) {
     ? promptRunner.liveProvider(opts.providerConfig || {})
     : promptRunner.mockProvider();
   const record = await promptRunner.runWeek(client, week, provider);
-  record.storedAt = now();
+  // `storedAt` is what the scheduler measures the weekly cadence against, so it
+  // must come from the SAME clock the scheduler compares with — otherwise an
+  // injected or skewed clock silently breaks the "is this week due?" check.
+  // Defaults to the real clock; the scheduler passes its own.
+  record.storedAt = opts.nowFn ? new Date(opts.nowFn()).toISOString() : now();
   if (!Array.isArray(client.promptRunHistory)) client.promptRunHistory = [];
   // append-only across weeks; a re-run of the same week replaces that week only
   client.promptRunHistory = client.promptRunHistory.filter(r => r.week !== week).concat([record]);
@@ -3104,6 +3418,7 @@ function migrateClients(store) {
     if (!Array.isArray(c.snapshots)) { c.snapshots = []; touched = true; }
     if (c.proprietaryIntake === undefined) { c.proprietaryIntake = null; touched = true; }
     if (!Array.isArray(c.promptRunHistory)) { c.promptRunHistory = []; touched = true; }
+    if (!Array.isArray(c.notes)) { c.notes = []; touched = true; } // AUR-J1 backfill
     if (c.thresholds && c.thresholds.decayThreshold == null) {
       c.thresholds.decayThreshold = DEFAULT_THRESHOLDS.decayThreshold; touched = true;
     }
@@ -3137,6 +3452,7 @@ module.exports = {
   profileDecision, promptSetDecision,
   planDecision, articleDecision, visibilityDecision, publishConfirmation,
   reportDecision, resolveEscalation, updateSettings, saveProprietaryIntake,
+  addPortalNote, readPortalNote, replyPortalNote,
   runPromptWeek, migrateClients
 };
 
@@ -3155,8 +3471,15 @@ __define('report', function (module, exports, require) {
 // internal volatility metrics and never appear here.
 const { getBrand } = require('./brand');
 
-const ENGINES = ['chatgpt', 'gemini', 'perplexity', 'google_ai_overview', 'claude'];
-const ENGINE_LABEL = { chatgpt: 'ChatGPT', gemini: 'Gemini', perplexity: 'Perplexity', google_ai_overview: 'Google AI Overview', claude: 'Claude' };
+const ENGINES = ['chatgpt', 'gemini', 'perplexity', 'google_ai_overview', 'claude', 'google_ai_mode'];
+const ENGINE_LABEL = { chatgpt: 'ChatGPT', gemini: 'Gemini', perplexity: 'Perplexity', google_ai_overview: 'Google AI Overview', claude: 'Claude', google_ai_mode: 'Google AI Mode' };
+
+// AUR-B2: referrer domain → the engine name a client recognises. Aggregated
+// per label (chatgpt.com and chat.openai.com are one ChatGPT row).
+const AI_REFERRER_LABEL = {
+  'chatgpt.com': 'ChatGPT', 'chat.openai.com': 'ChatGPT', 'perplexity.ai': 'Perplexity',
+  'gemini.google.com': 'Gemini', 'claude.ai': 'Claude', 'copilot.microsoft.com': 'Copilot'
+};
 
 function esc(s) { return String(s ?? '').replace(/[&<>"]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m])); }
 function pct(x) { return `${(x * 100).toFixed(0)}%`; }
@@ -3199,8 +3522,8 @@ function ownerCell(v, id) {
   return `<td class="no">${esc(id.competitor(v))}</td>`;
 }
 
-function statTile(label, value, sub) {
-  return `<div class="tile"><div class="tile-label">${esc(label)}</div>` +
+function statTile(label, value, sub, flag) {
+  return `<div class="tile"><div class="tile-label">${esc(label)}${flag || ''}</div>` +
     `<div class="tile-value">${esc(value)}</div>` +
     (sub ? `<div class="tile-sub">${esc(sub)}</div>` : '') + '</div>';
 }
@@ -3216,6 +3539,15 @@ function appearanceCell(cell, id) {
   return '<td class="nobody">nobody</td>';
 }
 
+// AUR-H1: data-source labelling. The monitor stamps report.sources per block
+// ('live' / 'mixed' / 'mock'); prompt tracking carries its own dataSource.
+// A report stored before the stamp existed has no sources — that reads as
+// simulated, never as measured. Only deviations from 'live' are flagged.
+function srcFlag(mode) {
+  if (mode === 'live') return '';
+  return ` <span class="sim-flag">${mode === 'mixed' ? 'partly simulated' : 'simulated data'}</span>`;
+}
+
 function renderReport(client, report, opts = {}) {
   const demo = !!opts.demo;
   const brand = opts.brand || getBrand();
@@ -3224,37 +3556,112 @@ function renderReport(client, report, opts = {}) {
   const sc = pt && pt.scorecard ? pt.scorecard : null;
   const lang = client.profile && client.profile.primaryLanguage === 'nl' ? 'nl' : 'en';
 
+  const src = report.sources || {};
+  const srcOf = (key) => src[key] || 'mock';
+  // AUR-H5: the baseline anchor has its own provenance — week 0 is never run,
+  // so it stays mock long after the current week goes live. It counts toward
+  // allLive whenever a "Baseline → now" tile renders it.
+  const baseMode = pt && pt.baselineScorecard ? pt.baselineScorecard.dataSource || 'mock' : null;
+  const modes = [srcOf('searchConsole'), srcOf('ga4'), srcOf('queryCitations'),
+    ...(pt ? [pt.dataSource || 'mock'] : []),
+    ...(baseMode ? [baseMode] : []),
+    ...(report.decay && report.decay.watchlist.length ? [srcOf('decay')] : [])];
+  const allLive = modes.every(m => m === 'live');
+
+  // AUR-H2: the degenerate weeks real data produces. Zero appearances means
+  // Link Rate has no denominator — a fake 0% is not a measurement. Same for
+  // Share of Voice when NOBODY (client or competitor) appeared. And a
+  // one-week "rolling average" is not a thing, so week 1 says what it is.
+  const noAppearances = sc ? sc.visibility === 0 : false;
+  const anyoneAppeared = pt && pt.appearance ? pt.appearance.rows.some(r =>
+    ENGINES.some(e => {
+      const cell = r.engines[e];
+      return !!cell && (cell.appeared || Object.values(cell.competitors || {}).some(Boolean));
+    })) : true;
+  const firstWeek = pt ? pt.rolling.weeks.length === 1 : false;
+  // per-engine honesty (AUR-H2): in a mixed week, flag the engine rows whose
+  // numbers came from the mock fallback (e.g. an engine that errored out)
+  const engineFlag = (e) => pt && pt.dataSource === 'mixed' && pt.perEngineSource
+    ? srcFlag(pt.perEngineSource[e]) : '';
+
+  // AUR-A9: branded prompts are their own segment with their own denominator —
+  // Visibility's denominator is the unbranded prompts only, so the headline
+  // number stays comparable to the baseline captured before branded existed.
+  const branded = sc && sc.branded && sc.branded.promptCount ? sc.branded : null;
+  const unbrandedCount = pt ? pt.promptCount - (branded ? branded.promptCount : 0) : 0;
+  const brandedBaseline = pt && pt.baselineScorecard ? pt.baselineScorecard.branded || null : null;
+  const noBrandedAppearances = branded ? branded.visibility === 0 : false;
+
   const tiles = sc ? [
     statTile('Visibility (this week)', pct(sc.visibility),
-      `share of ${pt.promptCount} tracked prompts where the brand appears`),
-    statTile('Link Rate (this week)', pct(sc.linkRate),
-      'share of appearances that link to the site — the metric that matters'),
-    statTile(`Rolling ${pt.rolling.weeks.length}-week average`, pct(pt.rolling.visibility),
-      `Visibility, weeks ${pt.rolling.weeks.join(' · ')}`),
+      `share of ${unbrandedCount} tracked prompts where the brand appears`),
+    noAppearances
+      ? statTile('Link Rate (this week)', '—',
+          'no appearances yet — Link Rate measures the share of appearances that link to the site')
+      : statTile('Link Rate (this week)', pct(sc.linkRate),
+          'share of appearances that link to the site — the metric that matters'),
+    firstWeek
+      ? statTile('First tracked week', pct(pt.rolling.visibility),
+          'the trend reads on a rolling 4-week average, building from week 2')
+      : statTile(`Rolling ${pt.rolling.weeks.length}-week average`, pct(pt.rolling.visibility),
+          `Visibility, weeks ${pt.rolling.weeks.join(' · ')}`),
     statTile('Baseline → now',
       `${pt.baselineScorecard ? pct(pt.baselineScorecard.visibility) : '—'} → ${pct(pt.rolling.visibility)}`,
-      'Visibility frozen at onboarding vs the rolling average'),
-    ...(pt.shareOfVoice ? [statTile('Share of Voice', pct(pt.shareOfVoice.overall),
-      'brand appearances ÷ all appearances across the competitor set')] : [])
+      baseMode && baseMode !== 'live'
+        ? 'estimated Visibility at onboarding vs the measured rolling average'
+        : 'Visibility frozen at onboarding vs the rolling average',
+      baseMode ? srcFlag(baseMode) : ''),
+    ...(pt.shareOfVoice ? [anyoneAppeared
+      ? statTile('Share of Voice', pct(pt.shareOfVoice.overall),
+          'brand appearances ÷ all appearances across the competitor set')
+      : statTile('Share of Voice', '—',
+          'no appearances by anyone this week — neither the brand nor a competitor')] : [])
   ].join('') : '';
 
   const engineRows = sc ? ENGINES.map(e =>
-    `<tr><td>${ENGINE_LABEL[e]}</td><td>${pct(sc.perEngine[e].visibility)}</td>` +
+    `<tr><td>${ENGINE_LABEL[e]}${engineFlag(e)}</td><td>${pct(sc.perEngine[e].visibility)}</td>` +
     `<td>${pct(sc.perEngine[e].linkRate)}</td>` +
-    `<td>${pt.shareOfVoice ? pct(pt.shareOfVoice.perEngine[e]) : '—'}</td></tr>`).join('') : '';
+    `<td>${pt.shareOfVoice && anyoneAppeared ? pct(pt.shareOfVoice.perEngine[e]) : '—'}</td></tr>`).join('') : '';
+
+  // AUR-A9: branded prompts contain the client's name — in demo mode that name
+  // must not leak through the prompt text, or the anonymisation is decorative.
+  const brandStr = (client.profile && client.profile.brandName) || client.name;
+  const promptLabel = (text) => demo ? String(text).split(brandStr).join('the client') : text;
 
   const appearanceRows = pt && pt.appearance ? [...pt.appearance.rows]
     .map(r => ({ ...r, appearedOn: ENGINES.filter(e => r.engines[e] && r.engines[e].appeared).length }))
     .sort((a, b) => b.appearedOn - a.appearedOn)
     .slice(0, 10)
-    .map(r => `<tr><td>${esc(r.prompt)}</td><td class="dim">${esc(r.stage || '')}</td>` +
+    .map(r => `<tr><td>${esc(promptLabel(r.prompt))}</td><td class="dim">${esc(r.stage || '')}</td>` +
       `${ENGINES.map(e => appearanceCell(r.engines[e], id)).join('')}</tr>`).join('') : '';
 
   const queryRows = (report.queryCitations || []).slice(0, 8).map(row =>
     `<tr><td>${esc(row.query)}</td>${ENGINES.map(e => ownerCell(row.engines[e], id)).join('')}</tr>`).join('');
 
+  // AUR-H2: a keyword a live GSC pull returned no row for is a real zero with
+  // no ranking to report — position renders as —, never as "null".
   const kwRows = (report.keywords || []).slice(0, 8).map(k =>
-    `<tr><td>${esc(k.keyword)}</td><td>${k.impressions}</td><td>${k.clicks}</td><td>${k.position}</td></tr>`).join('');
+    `<tr><td>${esc(k.keyword)}</td><td>${k.impressions}</td><td>${k.clicks}</td><td>${k.position == null ? '—' : k.position}</td></tr>`).join('');
+  const kwAllZero = srcOf('searchConsole') === 'live' && (report.keywords || []).length > 0 &&
+    report.keywords.every(k => !k.impressions && !k.clicks);
+
+  // AI referrals exist only when a live GA4 pull segmented them — there is no
+  // mock for this channel, so the section simply doesn't render otherwise.
+  const aiRef = report.aiReferrals || null;
+  const aiRefRows = aiRef ? (() => {
+    const byLabel = new Map();
+    for (const [domain, v] of Object.entries(aiRef.byDomain)) {
+      const label = AI_REFERRER_LABEL[domain] || domain;
+      const acc = byLabel.get(label) || { sessions: 0, conversions: 0 };
+      acc.sessions += v.sessions;
+      acc.conversions += v.conversions;
+      byLabel.set(label, acc);
+    }
+    return [...byLabel.entries()]
+      .sort((a, b) => b[1].sessions - a[1].sessions)
+      .map(([label, v]) => `<tr><td>${esc(label)}</td><td>${v.sessions}</td><td>${v.conversions}</td></tr>`)
+      .join('');
+  })() : '';
 
   const decay = report.decay || null;
   const decayRows = decay && decay.watchlist.length ? decay.watchlist.map(w =>
@@ -3279,6 +3686,8 @@ h2 { font-size: 16px; margin: 32px 0 8px; }
 .brandmark { font-weight: 700; letter-spacing: .12em; margin-bottom: 8px; }
 .brandmark svg { height: 32px; width: auto; display: block; }
 .demo-flag { display: inline-block; background: #fff3e0; color: var(--warn); border: 1px solid var(--warn); border-radius: 4px; padding: 2px 8px; font-size: 12px; font-weight: 600; }
+.sim-flag { display: inline-block; background: #fff3e0; color: var(--warn); border: 1px solid var(--warn); border-radius: 4px; padding: 1px 7px; font-size: 11px; font-weight: 600; letter-spacing: .02em; vertical-align: 2px; text-transform: none; }
+.sim-banner { background: #fff3e0; border: 1px solid var(--warn); border-radius: 8px; color: var(--warn); padding: 12px 16px; margin: 20px 0 0; font-size: 13.5px; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-top: 20px; }
 .tile { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
 .tile-label { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); }
@@ -3307,10 +3716,15 @@ td.nobody { color: var(--dim); font-style: italic; }
     <div class="brandmark">${brand.logoSvg || esc(brand.logoText)}</div>
     <h1>AI search visibility — weekly report #${report.week}</h1>
     <p class="dim" style="margin:0">${esc(id.name)} · ${esc(id.domain)} · ${esc(report.createdAt.slice(0, 10))}
-    ${demo ? ' · <span class="demo-flag">ANONYMISED DEMO — real metrics, identity withheld</span>' : ''}</p>
+    ${demo ? ` · <span class="demo-flag">ANONYMISED DEMO — ${allLive ? 'real metrics, ' : ''}identity withheld</span>` : ''}</p>
   </div>
   <button class="printbtn" onclick="window.print()">Print / save as PDF</button>
 </header>
+
+${allLive ? '' : `
+<div class="sim-banner"><strong>This report contains simulated data.</strong> Sections marked
+“simulated data” are generated placeholders shown while that data source comes online — they are
+not measurements. Every unmarked figure is measured.</div>`}
 
 <div class="intro">
   <p>This is your weekly visibility report. Everything in it is measured against your frozen baseline — the state
@@ -3325,16 +3739,42 @@ td.nobody { color: var(--dim); font-style: italic; }
 ${sc ? `
 <div class="tiles">${tiles}</div>
 
-<div class="note"><strong>How to read this:</strong> every prompt is checked ${pt.runsPerPrompt} times per engine
+<div class="note"><strong>How to read this:</strong>${srcFlag(pt.dataSource || 'mock')} every prompt is checked ${pt.runsPerPrompt} times per engine
 each week because AI answers vary run to run. <strong>Visibility</strong> is the share of tracked prompts where
 the brand appears in the answer; <strong>Link Rate</strong> is the share of those appearances that link to the
 site. Weekly numbers swing — 40–60% monthly volatility (drift) is normal in AI search — so trend decisions are
-made on the <strong>${pt.rolling.weeks.length}-week rolling average</strong>, never on a single week.</div>
+${firstWeek
+  ? 'made on a <strong>rolling 4-week average</strong> as it builds, never on a single week — this report is week 1 of that window.'
+  : `made on the <strong>${pt.rolling.weeks.length}-week rolling average</strong>, never on a single week.`}
+${branded ? ` Prompts that ask about the brand by name are measured as their <strong>own segment below</strong> and
+are never counted in the Visibility number above.` : ''}</div>
 
-<h2>Visibility by engine</h2>
+${branded ? `
+<h2 data-testid="branded-segment">Asked about the brand by name — branded prompts${srcFlag(pt.dataSource || 'mock')}</h2>
+<div class="tiles">
+  ${statTile('Branded visibility (this week)', pct(branded.visibility),
+    `share of ${branded.promptCount} prompts naming the brand where it appears`)}
+  ${noBrandedAppearances
+    ? statTile('Branded link rate (this week)', '—',
+        'no branded appearances yet — link rate measures the share of appearances that link to the site')
+    : statTile('Branded link rate (this week)', pct(branded.linkRate),
+        'share of branded appearances that link to the site')}
+  ${brandedBaseline
+    ? statTile('Baseline → now', `${pct(brandedBaseline.visibility)} → ${pct(branded.visibility)}`,
+        'branded visibility frozen at onboarding vs this week', srcFlag(baseMode))
+    : statTile('Baseline → now', '—',
+        'no baseline for this segment — branded prompts were added to tracking after your baseline was frozen, so its history starts now')}
+</div>
+<p class="dim small">“What does ChatGPT say about us?” — these prompts name the brand directly, so the brand
+appearing in them measures something different from the unbranded questions above. They carry their own
+denominator and never inflate the headline Visibility number.</p>` : ''}
+
+<h2>Visibility by engine${srcFlag(pt.dataSource || 'mock')}</h2>
 <table><tr><th>Engine</th><th>Visibility</th><th>Link Rate</th><th>Share of Voice</th></tr>${engineRows}</table>
 
-<h2>Where the brand appears — top prompts</h2>
+<h2>${noAppearances ? 'Tracked prompts — who appears instead' : 'Where the brand appears — top prompts'}${srcFlag(pt.dataSource || 'mock')}</h2>
+${noAppearances ? `<p class="dim small">The brand did not appear in any tracked prompt this week. Each check below shows who is
+cited instead — or “nobody”, the whitespace the content plan targets first.</p>` : ''}
 <table><tr><th>Prompt</th><th>Stage</th>${ENGINES.map(e => `<th>${ENGINE_LABEL[e]}</th>`).join('')}</tr>${appearanceRows}</table>
 <p class="dim small">✓ = brand appears · ⛓ = appearance links to the site · #n = position in the answer ·
 a competitor name = who appears instead · “nobody” = whitespace. Showing 10 of ${pt.promptCount} tracked prompts.</p>
@@ -3343,21 +3783,31 @@ a competitor name = who appears instead · “nobody” = whitespace. Showing 10
 performance and per-article citations only.</div>
 `}
 
-<h2>Who does each engine cite on the core queries?</h2>
+<h2>Who does each engine cite on the core queries?${srcFlag(srcOf('queryCitations'))}</h2>
 <table><tr><th>Query</th>${ENGINES.map(e => `<th>${ENGINE_LABEL[e]}</th>`).join('')}</tr>${queryRows}</table>
 <p class="dim small">“nobody” = citation whitespace — the cheapest wins; these queries are fed straight back into the content plan.</p>
 
 ${decay && decay.watchlist.length ? `
-<h2>Decay watchlist — queued for the next refresh cycle</h2>
+<h2>Decay watchlist — queued for the next refresh cycle${srcFlag(srcOf('decay'))}</h2>
 <table><tr><th>Page</th><th>Health</th><th>Trend</th><th>Factors</th></tr>${decayRows}</table>
 <p class="dim small">Pages below health ${decay.threshold}/100 on two consecutive reports. Nothing enters this list
 on a single observation.</p>` : ''}
 
-<h2>Search performance (Google Search Console)</h2>
+<h2>Search performance (Google Search Console)${srcFlag(srcOf('searchConsole'))}</h2>
 <table><tr><th>Keyword</th><th>Impressions</th><th>Clicks</th><th>Position</th></tr>${kwRows}</table>
+${kwAllZero ? `<p class="dim small">No Search Console history yet for these keywords — a new domain starts at zero. Impressions
+appear here as pages are indexed and begin to rank.</p>` : ''}
 
-<h2>Traffic (GA4)</h2>
+<h2>Traffic (GA4)${srcFlag(srcOf('ga4'))}</h2>
 <p class="dim">Organic sessions: ${report.ga4.organicSessions} · Engagement rate: ${report.ga4.engagementRate} · Conversions: ${report.ga4.conversions}</p>
+
+${aiRef ? `
+<h2>AI referrals — visitors arriving from AI assistants</h2>
+<table><tr><th>Assistant</th><th>Sessions</th><th>Conversions</th></tr>${aiRefRows}</table>
+<div class="placeholder">Placeholder prose (Sami's copy pack): ${aiRef.aiSessions} of
+${aiRef.aiSessions + aiRef.otherSessions} sessions this period arrived directly from an AI assistant —
+real people clicking through from an AI answer to the site. This is the line that connects
+appearing in answers to actual visits.</div>` : ''}
 
 <div class="closing">
   <p><strong>What happens next:</strong> the plan for the coming period is already in motion — new content against
@@ -3375,7 +3825,8 @@ on a single observation.</p>` : ''}
   <p class="dim">Questions about anything in here? Leave a note in your portal — it reaches a person, not a
   mailbox.</p>
 </div>
-<p class="dim small">Generated by the ${esc(brand.name)} pipeline · report #${report.week} · baseline recorded before engagement start.</p>
+<p class="dim small">Generated by the ${esc(brand.name)} pipeline · report #${report.week} · baseline recorded before engagement start.${
+  report.gscWindow ? ` · Search Console data window ${esc(report.gscWindow.startDate)} → ${esc(report.gscWindow.endDate)} (GSC data lags 2–3 days).` : ''}</p>
 </div></body></html>`;
 }
 
@@ -3398,7 +3849,7 @@ const __DEMO_KEY = 'aureva-demo-db';
 // scorecard, no frozen week-0 snapshot, no decay). Bump this whenever the
 // seeded shape changes: a mismatch clears the stored db so the current bundle
 // re-seeds fresh. (The "Reset demo data" button does the same thing manually.)
-const __SEED_VERSION = 'v1.4';
+const __SEED_VERSION = 'v1.4-c1';
 const __VERSION_KEY = 'aureva-demo-version';
 try {
   if (localStorage.getItem(__VERSION_KEY) !== __SEED_VERSION) {
@@ -3472,6 +3923,8 @@ async function __route(method, url, body) {
       const history = c.promptRunHistory || [];
       const week = history.length ? history[history.length - 1].week + 1 : 1;
       const record = await __orch.runPromptWeek(__store, x[1], week, {});
+      // same cadence unit as the real server: prompt run + monitor
+      __orch.runStage(__store, x[1], 'monitor');
       return { status: 200, body: {
         week: record.week, provider: record.provider, runsPerPrompt: record.runsPerPrompt,
         promptCount: record.prompts.length, coverage: record.coverage,
@@ -3610,6 +4063,16 @@ function __seed() {
     __orch.runStage(__store, c1.id, 'research');
     __orch.planDecision(__store, c1.id, 'approve', 'demo seed');
     ['brief', 'writer', 'quality', 'publish'].forEach(s => __orch.runStage(__store, c1.id, s));
+    // AUR-C3: visibility notifications fire only on GA4 page traffic — the
+    // demo simulates the nightly pull's cache (everything here is simulated)
+    // so the portal decision flow stays visible.
+    const __pub1 = __store.getClient(c1.id).articles.filter(a => a.publishedUrl);
+    __store.getClient(c1.id).ga4Cache = {
+      pages: {
+        window: { startDate: '2026-07-01', endDate: '2026-07-07' },
+        sessions: Object.fromEntries(__pub1.slice(0, 3).map((a, i) => [`/${a.slug}`, 9 - i]))
+      }
+    };
     __orch.runStage(__store, c1.id, 'monitor');
     __orch.reportDecision(__store, c1.id, __store.getClient(c1.id).reports[0].id, 'approve');
     __orch.runStage(__store, c1.id, 'monitor');
@@ -3666,7 +4129,7 @@ __seed();
 const state = { clients: [], selId: null, tab: 'pipeline', view: 'client', heatmapEngine: 'chatgpt', authed: true };
 const $ = (s) => document.querySelector(s);
 const ENGINES = ['chatgpt', 'gemini', 'perplexity', 'google_ai_overview', 'claude'];
-const ENGINE_LABEL = { chatgpt: 'ChatGPT', gemini: 'Gemini', perplexity: 'Perplexity', google_ai_overview: 'Google AI Overview', claude: 'Claude' };
+const ENGINE_LABEL = { chatgpt: 'ChatGPT', gemini: 'Gemini', perplexity: 'Perplexity', google_ai_overview: 'Google AI Overview', claude: 'Claude', google_ai_mode: 'Google AI Mode' };
 const IS_DEMO = typeof window.demoReset === 'function'; // demo.html bundles the shim; no auth there
 
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m])); }
@@ -3765,8 +4228,13 @@ window.visibilityDecide = (aid, d) => act(() => api('POST', `/api/clients/${stat
   d === 'make_visible' ? 'Post is now publicly visible (in navigation)' : 'Post kept hidden (sitemap-only)');
 window.reportDecide = (rid) => act(() => api('POST', `/api/clients/${state.selId}/reports/${rid}/decision`, { decision: 'approve' }), 'Report approved — optimization unlocked');
 window.runPromptWeek = () => act(() => api('POST', `/api/clients/${state.selId}/prompt-week`)
-  .then(r => ({ status: 'PASS', summary: `Prompt week ${r.week} recorded (${r.provider} provider, coverage ${Math.round(r.coverage.rate * 100)}%${r.costEUR ? `, ~€${r.costEUR.toFixed(2)}` : ''}). Run the monitor to fold it into a report.` })));
+  .then(r => ({ status: 'PASS', summary: `Prompt week ${r.week} recorded (${r.provider} provider, coverage ${Math.round(r.coverage.rate * 100)}%${r.costEUR ? `, ~€${r.costEUR.toFixed(2)}` : ''}) and folded into a weekly report — pending specialist review.` })));
 window.resolveEsc = (eid, action) => act(() => api('POST', `/api/clients/${state.selId}/escalations/${eid}/resolve`, { action }), `Escalation resolved: ${action}`);
+window.noteRead = (nid) => act(() => api('POST', `/api/clients/${state.selId}/notes/${nid}/read`), 'Note marked read');
+window.noteReply = (nid) => {
+  const text = $(`#note-reply-${nid}`).value;
+  return act(() => api('POST', `/api/clients/${state.selId}/notes/${nid}/reply`, { text }), 'Reply sent — visible in the client portal');
+};
 window.selectClient = (id) => { state.selId = id; state.view = 'client'; state.tab = 'pipeline'; render(); };
 window.setTab = (t) => { state.tab = t; render(); };
 window.showOnboard = () => { state.view = 'onboard'; render(); };
@@ -3901,7 +4369,7 @@ window.viewReport = (rid) => {
       Link Rate <strong>${Math.round(pt.scorecard.linkRate * 100)}%</strong>
       ${pt.shareOfVoice ? ` · Share of Voice <strong>${Math.round(pt.shareOfVoice.overall * 100)}%</strong>` : ''}
       · Rolling ${pt.rolling.weeks.length}-week Visibility <strong>${Math.round((pt.rolling.visibility || 0) * 100)}%</strong>
-      ${pt.baselineScorecard ? ` · Baseline anchor ${Math.round(pt.baselineScorecard.visibility * 100)}% → ${Math.round((pt.rolling.visibility || 0) * 100)}%` : ''}
+      ${pt.baselineScorecard ? ` · Baseline anchor ${Math.round(pt.baselineScorecard.visibility * 100)}%${(pt.baselineScorecard.dataSource || 'mock') !== 'live' ? ' (simulated)' : ''} → ${Math.round((pt.rolling.visibility || 0) * 100)}%` : ''}
     </p>` : ''}
     <p data-testid="prompt-tracking-summary" class="dim">
       Internal volatility metrics (run-based, operator-only — never client-facing):
@@ -3955,19 +4423,22 @@ window.viewReport = (rid) => {
 function render() {
   $('#client-list').innerHTML = state.clients.map(c =>
     `<a href="#" class="${c.id === state.selId && state.view === 'client' ? 'sel' : ''}" data-testid="client-link-${esc(c.name)}"
-       onclick="selectClient('${c.id}');return false">${esc(c.name)}<small>${esc(c.domain)}</small></a>`).join('')
+       onclick="selectClient('${c.id}');return false">${esc(c.name)}${(c.notes || []).some(n => n.status === 'unread')
+         ? ` <span class="note-dot" data-testid="note-dot-${esc(c.name)}" title="unread client note">●</span>` : ''}<small>${esc(c.domain)}</small></a>`).join('')
     || '<p class="dim" style="padding:8px">No clients yet.</p>';
 
   if (state.view === 'onboard' || !state.clients.length) return renderOnboard();
   const c = sel();
   if (!c) return;
 
-  const tabs = ['pipeline', 'profile', 'baseline', 'visibility', 'plan', 'content', 'publishing', 'monitoring', 'escalations', 'audit', 'integrations', 'settings'];
+  const tabs = ['pipeline', 'profile', 'baseline', 'visibility', 'plan', 'content', 'publishing', 'monitoring', 'notes', 'escalations', 'audit', 'integrations', 'settings'];
   const openEsc = c.escalations.filter(e => e.status === 'open').length;
+  const unreadNotes = (c.notes || []).filter(n => n.status === 'unread').length;
   const pendingNotif = c.notifications ? c.notifications.filter(n => n.status === 'pending').length : 0;
   const profilePending = (c.profile && c.profile.status === 'pending_approval' ? 1 : 0) +
     (c.promptSet && c.promptSet.status === 'pending_approval' ? 1 : 0);
   const label = {
+    notes: `notes${unreadNotes ? ` (${unreadNotes})` : ''}`,
     escalations: `escalations${openEsc ? ` (${openEsc})` : ''}`,
     publishing: `publishing${pendingNotif ? ` (${pendingNotif})` : ''}`,
     profile: `profile${profilePending ? ` (${profilePending})` : ''}`
@@ -4032,7 +4503,7 @@ function renderTab(c) {
     pipeline: renderPipeline, profile: renderProfile, baseline: renderBaseline, visibility: renderVisibility,
     plan: renderPlan, content: renderContent,
     publishing: renderPublishing, monitoring: renderMonitoring,
-    escalations: renderEscalations, audit: renderAudit,
+    notes: renderNotes, escalations: renderEscalations, audit: renderAudit,
     integrations: renderIntegrations, settings: renderSettings
   }[state.tab](c);
 }
@@ -4296,6 +4767,10 @@ function renderVisibility(c) {
       ${scoreTile('Share of Voice', sov ? pctv(sov.overall) : '—',
         baseRun && baseRun.shareOfVoice ? `baseline ${pctv(baseRun.shareOfVoice.overall)} → now ${sov ? pctv(sov.overall) : '—'}` : '',
         'brand vs competitor appearances')}
+      ${sc.branded && sc.branded.promptCount ? scoreTile('Branded visibility', pctv(sc.branded.visibility),
+        anchor && anchor.branded ? `baseline ${pctv(anchor.branded.visibility)} → now ${pctv(sc.branded.visibility)}`
+          : 'no baseline — branded segment added after onboarding',
+        `${sc.branded.promptCount} prompts naming the client · own denominator, never counted in Visibility (AUR-A9)`) : ''}
     </div>
     <table style="max-width:560px" data-testid="vis-perengine">
       <tr><th>Engine</th><th>Visibility</th><th>Link Rate</th><th>Share of Voice</th></tr>
@@ -4333,17 +4808,47 @@ function renderVisibility(c) {
       <tr><td>llms.txt</td><td>${cc ? (cc.llmsTxt.present ? '<span class="cite-yes">✓ present</span>' : '<span class="cite-no">⚠ missing</span>') : '<span class="dim">simulated until live crawl</span>'}</td></tr>
       <tr><td>Sitemap</td><td>${cc ? (cc.sitemapFound ? '<span class="cite-yes">✓ found</span>' : '<span class="cite-no">⚠ not found</span>') : '<span class="dim">simulated until live crawl</span>'}</td></tr>
       <tr><td>Schema coverage (existing pages)</td><td>${schemaCov} pages with structured data</td></tr>
+      ${bingRows(c)}
       <tr><td>Page speed</td><td><span class="dim">placeholder — arrives with the live adapters</span></td></tr>
     </table>`;
+}
+
+// AUR-B3: per-URL Bing index status — a page missing from Bing is invisible to
+// a large share of ChatGPT Search traffic, so it gets its own lines, distinct
+// from anything Google reports. Real or absent, never simulated.
+function bingRows(c) {
+  const bc = c.bingCache;
+  if (!bc) {
+    return `<tr data-testid="tech-bing"><td>Bing index (ChatGPT Search)</td>
+      <td><span class="dim">not connected — add the client's Bing Webmaster API key in settings</span></td></tr>`;
+  }
+  const missing = bc.urls.filter(u => !u.indexed);
+  return `
+    <tr data-testid="tech-bing"><td>Bing index (ChatGPT Search)</td>
+      <td>${missing.length
+        ? `<span class="cite-no">⚠ ${missing.length} of ${bc.urls.length} published URLs missing</span>`
+        : `<span class="cite-yes">✓ all ${bc.urls.length} published URLs indexed</span>`}
+      <span class="dim">· checked ${esc(bc.pulledAt.slice(0, 10))}</span></td></tr>
+    ${bc.urls.map(u => `<tr data-testid="tech-bing-url-${esc(u.slug)}"><td class="dim">· /${esc(u.slug)}</td>
+      <td>${u.indexed ? '<span class="cite-yes">✓ in Bing\'s index</span>'
+        : '<span class="cite-no">⚠ missing from Bing — invisible to ChatGPT Search</span>'}</td></tr>`).join('')}`;
 }
 
 function renderPlan(c) {
   if (!c.plan) return '<div class="empty" data-testid="plan-empty">No content plan yet — run the Research agent.</div>';
   const p = c.plan;
+  // AUR-B4: where volume/competition came from — a plan without the stamp
+  // predates the DataForSEO seam and reads as simulated
+  const dsBadge = p.dataSource === 'live'
+    ? '<span class="badge b-PASS" data-testid="plan-datasource">● volumes: DataForSEO</span>'
+    : p.dataSource === 'mixed'
+      ? '<span class="badge b-low" data-testid="plan-datasource">◐ volumes: mixed DataForSEO/simulated</span>'
+      : '<span class="badge b-medium" data-testid="plan-datasource">simulated volumes</span>';
   return `
     <div class="row">
       <h2 style="margin:0">Content plan v${p.version}</h2>
       ${badge(p.status)}
+      ${dsBadge}
       ${p.status === 'pending_approval' ? `
         <button class="primary" data-testid="plan-approve" onclick="planDecide('approve')">Approve plan</button>
         <button class="danger" data-testid="plan-reject" onclick="planDecide('reject')">Reject</button>` : ''}
@@ -4488,6 +4993,25 @@ function renderMonitoring(c) {
         <p class="dim">${esc(l.ts)} — ${l.pages.length} pages updated, ${l.gapsFedBack} gaps + whitespace queries fed back to Research</p>
         ${l.pages.map(pg => `<p class="dim">↻ ${esc(pg.slug)} → v${pg.version}: ${pg.actions.map(esc).join(', ')}</p>`).join('')}
       </div>`).join('')}` : ''}`;
+}
+
+// AUR-J1: the operator side of the portal note channel — a queue with an
+// unread state. Unanswered notes first, newest first within each group.
+function renderNotes(c) {
+  const notes = [...(c.notes || [])].reverse().sort((a, b) =>
+    (a.status === 'answered') - (b.status === 'answered'));
+  if (!notes.length) return '<div class="empty" data-testid="notes-empty">No client notes yet. When a client leaves one in their portal, it lands here.</div>';
+  return notes.map(n => `
+    <div class="card" style="margin-bottom:10px" data-testid="note-card-${n.id}">
+      <p style="margin:0 0 6px">${esc(n.text)}</p>
+      <p class="dim" style="margin:0 0 8px">${esc(n.createdAt.slice(0, 19).replace('T', ' '))} · ${badge(n.status)}</p>
+      ${n.reply ? `<p class="dim" style="margin:0">↳ replied ${esc(n.reply.createdAt.slice(0, 10))}: ${esc(n.reply.text)}</p>` : `
+      <div class="row" style="align-items:flex-start">
+        <textarea id="note-reply-${n.id}" data-testid="note-reply-${n.id}" rows="2" placeholder="Write a reply — the client sees it in their portal" style="flex:1"></textarea>
+        <button class="primary" data-testid="note-send-${n.id}" onclick="noteReply('${n.id}')">Reply</button>
+        ${n.status === 'unread' ? `<button data-testid="note-read-${n.id}" onclick="noteRead('${n.id}')">Mark read</button>` : ''}
+      </div>`}
+    </div>`).join('');
 }
 
 function renderEscalations(c) {
