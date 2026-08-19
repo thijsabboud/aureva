@@ -3525,6 +3525,7 @@ __define('report', function (module, exports, require) {
 // internal volatility metrics and never appear here.
 const { getBrand } = require('./brand');
 
+// Copy of the canonical list in src/adapters/mock.js — kept in sync by a test.
 const ENGINES = ['chatgpt', 'gemini', 'perplexity', 'google_ai_overview', 'claude', 'google_ai_mode'];
 const ENGINE_LABEL = { chatgpt: 'ChatGPT', gemini: 'Gemini', perplexity: 'Perplexity', google_ai_overview: 'Google AI Overview', claude: 'Claude', google_ai_mode: 'Google AI Mode' };
 
@@ -4183,7 +4184,9 @@ __seed();
 const state = { clients: [], selId: null, tab: 'pipeline', view: 'client', heatmapEngine: 'chatgpt', authed: true,
   prospects: [], prospectId: null, prospect: null, confirmDeleteProspect: false };
 const $ = (s) => document.querySelector(s);
-const ENGINES = ['chatgpt', 'gemini', 'perplexity', 'google_ai_overview', 'claude'];
+// Copy of the canonical list in src/adapters/mock.js — this file is served
+// statically and can't require() it. Keep the two in sync (guarded by a test).
+const ENGINES = ['chatgpt', 'gemini', 'perplexity', 'google_ai_overview', 'claude', 'google_ai_mode'];
 const ENGINE_LABEL = { chatgpt: 'ChatGPT', gemini: 'Gemini', perplexity: 'Perplexity', google_ai_overview: 'Google AI Overview', claude: 'Claude', google_ai_mode: 'Google AI Mode' };
 const IS_DEMO = typeof window.demoReset === 'function'; // demo.html bundles the shim; no auth there
 
