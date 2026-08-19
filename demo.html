@@ -29,6 +29,13 @@ body { background: var(--bg); color: var(--text); font: 14px/1.5 'Sora', 'Inter'
 #client-list a small { display: block; color: var(--dim); }
 #client-list .note-dot { color: var(--accent2); font-size: 10px; vertical-align: middle; }
 
+#prospect-sec { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 12px; }
+.side-head { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; }
+#btn-new-prospect { width: 100%; margin: 6px 0 10px; }
+#prospect-list a { display: block; padding: 8px 10px; border-radius: 6px; color: var(--text); text-decoration: none; margin-bottom: 4px; border: 1px solid transparent; }
+#prospect-list a.sel { background: var(--panel2); border-color: var(--line); }
+#prospect-list a small { display: block; color: var(--dim); }
+
 #main { flex: 1; padding: 20px 26px; max-width: 1100px; }
 h1 { font-size: 20px; margin-bottom: 2px; }
 h2 { font-size: 15px; margin: 18px 0 8px; color: var(--accent); }
@@ -60,6 +67,8 @@ th { color: var(--dim); font-weight: 500; font-size: 12px; }
 .b-NEEDS_REVIEW, .b-pending_approval, .b-pending_client_review, .b-pending_review, .b-draft, .b-medium, .b-INFO { color: var(--accent2); border-color: var(--accent2); }
 .b-FAIL, .b-flagged, .b-open, .b-high { color: var(--warn); border-color: var(--warn); }
 .b-ESCALATE_TO_HUMAN, .b-escalated, .b-rejected { color: var(--bad); border-color: var(--bad); }
+.b-ready { color: var(--accent2); border-color: var(--accent2); }
+.b-complete { color: var(--ok); border-color: var(--ok); }
 
 form.panel, .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; max-width: 560px; }
 label { display: block; margin: 10px 0 3px; font-size: 12px; color: var(--dim); }
@@ -499,6 +508,29 @@ function gscBaseline(client) {
   return {
     indexedPages: 3 + (fnv1a(client.domain + 'indexed') % 40),
     keywords
+  };
+}
+
+// Backlinks mock (DataForSEO backlinks/summary) — client + competitor off-site
+// profile captured once into the FROZEN baseline at onboarding (AUR-B6).
+// Targets normalise to the bare domain exactly like the server's live pull,
+// so mock and live profiles key identically for URL-form input.
+function backlinkProfile(domain) {
+  domain = String(domain).replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  const h = fnv1a(domain + 'bl0');
+  const referringDomains = 20 + (h % 400);
+  return {
+    target: domain,
+    backlinks: referringDomains * (3 + (h % 12)),
+    referringDomains,
+    rank: 40 + (h % 320)
+  };
+}
+
+function backlinksBaseline(client) {
+  return {
+    client: backlinkProfile(client.domain),
+    competitors: (client.competitors || []).map(backlinkProfile)
   };
 }
 
@@ -1025,7 +1057,7 @@ function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 module.exports = {
   ENGINES, REQUIRED_BOTS, INTENTS, PROMPT_RUNS, STAGE_OF_INTENT,
   crawlBrandSignals, generatePromptSet, promptRunCheck,
-  promptAppearance, competitorAppearance, gscBaseline,
+  promptAppearance, competitorAppearance, gscBaseline, backlinksBaseline,
   expandKeywords, autocomplete, competitorGaps, fanOutQueries,
   existingSite, scoreExistingPage, queryCitationOwner, findContradictions,
   gscKeywordData, ga4Data, articleVisitors, citationCheck, botVisits, impressionGaps,
@@ -1125,10 +1157,14 @@ function integrationStatus(env = process.env, store = null) {
     google_ai_overview: 'Google AI Overview (via DataForSEO SERP)',
     google_ai_mode: 'Google AI Mode (Gemini + live Search, via DataForSEO SERP)'
   };
+  // AUR-A12: the DataForSEO-backed engine rows flag sandbox mode like the
+  // dataforseo row itself — canned data must never present as live on the board
+  const dfsSandbox = dataforseo(env) && dataforseo(env).sandbox ? 'sandbox' : null;
   const rows = Object.keys(engineLabel).map(e =>
-    row(e, engineLabel[e], 'engine', engineMode(e, env)));
+    row(e, engineLabel[e], 'engine', engineMode(e, env),
+      e === 'google_ai_overview' || e === 'google_ai_mode' ? dfsSandbox : null));
   rows.push(row('dataforseo', 'DataForSEO (SERP · keywords · backlinks)', 'aureva',
-    dataforseo(env) ? 'live' : 'mock', dataforseo(env) && dataforseo(env).sandbox ? 'sandbox' : null));
+    dataforseo(env) ? 'live' : 'mock', dfsSandbox));
   rows.push(row('google_sa', 'Google service account (GSC + GA4)', 'aureva',
     googleSA(env) ? 'live' : 'mock'));
   rows.push(row('bing', 'Bing Webmaster Tools', 'client', 'per-client',
@@ -1252,7 +1288,10 @@ const RUNS_PER_PROMPT = mock.PROMPT_RUNS;
 
 // An OBSERVATION (one run of one prompt on one engine):
 //   { mentioned, cited, position: 1..10|null, insteadOf: 'competitor:<d>'|null,
-//     answerRef: string|null, source: 'live'|'mock', costEUR?, error? }
+//     answerRef: string|null, source: 'live'|'sandbox'|'mock', costEUR?, error? }
+// 'sandbox' (AUR-A12) is canned DataForSEO data fetched through the live
+// plumbing — every surface that distinguishes live from mock treats it as
+// non-live, so it can never enter the data asset looking like a measurement.
 
 // ---- Providers --------------------------------------------------------------
 
@@ -1345,6 +1384,7 @@ function liveProvider(providerConfig = {}) {
       const parsed = extractObservation(res, ctx.client);
       const answerRef = answers ? answers.append(ctx.client.id, ctx.week, {
         engine,
+        ...(res.sandbox ? { sandbox: true } : {}),
         promptId: ctx.promptId || null,
         promptText,
         runIdx: ctx.runIdx,
@@ -1371,7 +1411,7 @@ function liveProvider(providerConfig = {}) {
         position: parsed.position,
         insteadOf: !parsed.mentioned && firstCompetitor ? `competitor:${firstCompetitor}` : null,
         answerRef,
-        source: 'live',
+        source: res.sandbox ? 'sandbox' : 'live',
         costEUR: res.costEUR || 0
       };
       if (mod.deterministicPerWindow) windowCache.set(cacheKey, observation);
@@ -1416,7 +1456,8 @@ async function runWeek(client, week, provider = mockProvider()) {
           total++;
           if (!obs.error) {
             observed++;
-            sources[obs.source === 'live' ? 'live' : 'mock']++;
+            const kind = obs.source === 'live' ? 'live' : obs.source === 'sandbox' ? 'sandbox' : 'mock';
+            sources[kind] = (sources[kind] || 0) + 1;
           }
           if (obs.costEUR) {
             costEUR += obs.costEUR;
@@ -1532,7 +1573,7 @@ function reparseWeek(client, week, answers) {
     const p = rec.prompts.find(x => x.text === raw.promptText);
     const cell = p && p.engines[raw.engine];
     const matched = cell && cell.runs[raw.runIdx];
-    if (!matched || matched.source !== 'live') continue;
+    if (!matched || (matched.source !== 'live' && matched.source !== 'sandbox')) continue;
     const parsed = extractObservation(raw, client);
     const firstCompetitor = Object.keys(parsed.competitors)[0] || null;
     // cached deterministic runs share one stored answer — update every run
@@ -1810,6 +1851,14 @@ function baseline(client) {
   const robots = mock.crawlCheck(client);
   const avgCitability = Math.round(pages.reduce((s, p) => s + p.citability, 0) / pages.length);
 
+  // AUR-B6: the off-site dimension. Live iff the server pulled a real
+  // DataForSEO profile at onboarding (same cache seam as the crawler);
+  // otherwise the deterministic mock, labelled as such.
+  const bl = client.backlinksCache && client.backlinksCache.live ? client.backlinksCache : null;
+  const backlinks = bl
+    ? { dataSource: 'live', pulledAt: bl.pulledAt, client: bl.client, competitors: bl.competitors }
+    : { dataSource: 'mock', pulledAt: null, ...mock.backlinksBaseline(client) };
+
   const live = !!(client.crawlCache && client.crawlCache.live);
   const snap = {
     id: uid('base'),
@@ -1823,6 +1872,7 @@ function baseline(client) {
     whitespace,
     robots,
     gsc: mock.gscBaseline(client),                          // traditional-search baseline (v1.3)
+    backlinks,                                              // off-site baseline (AUR-B6)
     summary: {
       avgCitability,
       jsRenderedPages: pages.filter(p => p.jsRendered).length,
@@ -1850,7 +1900,10 @@ function baseline(client) {
       `${live ? ' (LIVE crawl)' : ''}: ${pages.length} existing pages (avg citability ${avgCitability}/100), ` +
       `${contradictions.length} contradictions, ${whitespace.length}/${queryBaseline.length} queries with citation whitespace, ` +
       `robots.txt ${robots.ok ? 'allows all AI crawlers' : `BLOCKS ${robots.blocked.join(', ')}`}` +
-      (live && snap.llmsTxt ? `, llms.txt ${snap.llmsTxt.present ? 'present' : 'MISSING'}` : '') + '.',
+      (live && snap.llmsTxt ? `, llms.txt ${snap.llmsTxt.present ? 'present' : 'MISSING'}` : '') +
+      `. Backlinks: ${backlinks.client.referringDomains} referring domains vs ` +
+      `${backlinks.competitors.length} competitor profile(s)` +
+      (backlinks.dataSource === 'mock' ? ' (simulated)' : ' (live)') + '.',
     ...(robots.ok ? {} : { escalation: { reason: `Onboarding robots.txt audit: blocks ${robots.blocked.join(', ')}` } })
   };
 }
@@ -2907,6 +2960,7 @@ function createClient(store, input) {
     simulateWebhookFailure: !!input.simulateWebhookFailure,
     createdAt: now(),
     crawlCache: input.crawlCache || null, // live-crawl result (v1.2.1), null = mock crawler
+    backlinksCache: input.backlinksCache || null, // DataForSEO pull at onboarding (AUR-B6), null = mock profile
     profile,
     promptSet: null,
     baseline: null,
@@ -3395,8 +3449,8 @@ async function runPromptWeek(store, clientId, week, opts = {}) {
   for (const [engine, eur] of Object.entries(record.costByEngine || {})) {
     cost.recordCost(client, engine, eur, record.storedAt);
   }
-  const mix = record.sources && record.sources.live
-    ? (record.sources.mock ? 'mixed live/mock' : 'live') : 'mock';
+  const kinds = ['live', 'sandbox', 'mock'].filter(k => record.sources && record.sources[k]);
+  const mix = kinds.length > 1 ? `mixed ${kinds.join('/')}` : kinds[0] || 'mock';
   audit(client, 'monitor', 'INFO',
     `Prompt-run history recorded for week ${week} (${mix} data, ` +
     `${record.prompts.length} prompts × ${mock.ENGINES.length} engines × ${record.runsPerPrompt} runs, ` +
@@ -4126,7 +4180,8 @@ __seed();
 'use strict';
 /* Aureva operator console — vanilla JS, no build step. */
 
-const state = { clients: [], selId: null, tab: 'pipeline', view: 'client', heatmapEngine: 'chatgpt', authed: true };
+const state = { clients: [], selId: null, tab: 'pipeline', view: 'client', heatmapEngine: 'chatgpt', authed: true,
+  prospects: [], prospectId: null, prospect: null, confirmDeleteProspect: false };
 const $ = (s) => document.querySelector(s);
 const ENGINES = ['chatgpt', 'gemini', 'perplexity', 'google_ai_overview', 'claude'];
 const ENGINE_LABEL = { chatgpt: 'ChatGPT', gemini: 'Gemini', perplexity: 'Perplexity', google_ai_overview: 'Google AI Overview', claude: 'Claude', google_ai_mode: 'Google AI Mode' };
@@ -4171,6 +4226,15 @@ async function refresh() {
   // v1.4: integration status board (source modes, health, never credentials)
   try { state.integrations = (await api('GET', '/api/integrations')).sources; }
   catch { state.integrations = null; }
+  // AUR-J3: prospect audits — server mode only (the demo shim has no prospect routes)
+  if (!IS_DEMO) {
+    try { state.prospects = await api('GET', '/api/prospects'); }
+    catch { state.prospects = []; }
+    if (state.view === 'prospect' && state.prospectId) {
+      try { state.prospect = await api('GET', `/api/prospects/${state.prospectId}`); }
+      catch { state.prospect = null; state.view = 'client'; }
+    }
+  }
   if (!state.selId && state.clients.length) state.selId = state.clients[0].id;
   render();
 }
@@ -4235,9 +4299,54 @@ window.noteReply = (nid) => {
   const text = $(`#note-reply-${nid}`).value;
   return act(() => api('POST', `/api/clients/${state.selId}/notes/${nid}/reply`, { text }), 'Reply sent — visible in the client portal');
 };
-window.selectClient = (id) => { state.selId = id; state.view = 'client'; state.tab = 'pipeline'; render(); };
+window.selectClient = (id) => { state.selId = id; state.view = 'client'; state.tab = 'pipeline'; state.confirmRejectPromptSet = false; render(); };
 window.setTab = (t) => { state.tab = t; render(); };
 window.showOnboard = () => { state.view = 'onboard'; render(); };
+
+// ---------- prospect audits (AUR-J3) ----------
+window.showProspectNew = () => { state.view = 'prospect-new'; render(); };
+window.selectProspect = async (id) => {
+  state.prospectId = id;
+  state.view = 'prospect';
+  state.confirmDeleteProspect = false;
+  try { state.prospect = await api('GET', `/api/prospects/${id}`); }
+  catch (e) { return toast(e.message, 'FAIL'); }
+  render();
+};
+window.submitProspectNew = async (ev) => {
+  ev.preventDefault();
+  const f = ev.target;
+  const list = (v) => v.split(',').map(s => s.trim()).filter(Boolean);
+  try {
+    const out = await api('POST', '/api/prospects', {
+      name: f.name.value, domain: f.domain.value, niche: f.niche.value || undefined,
+      keywords: list(f.keywords.value), competitors: list(f.competitors.value),
+      brandName: f.brandName.value || undefined,
+      primaryLanguage: f.primaryLanguage.value,
+      audiences: list(f.audiences.value)
+    });
+    toast('Audit created — review and approve the prompt set before running.');
+    await refresh();
+    await selectProspect(out.id);
+  } catch (e) { toast(e.message, 'FAIL'); }
+  return false;
+};
+window.prospectDecide = (d) => act(() =>
+  api('POST', `/api/prospects/${state.prospectId}/promptset/decision`, { decision: d }), `Prompt set ${d}d`);
+window.prospectRun = () => act(() =>
+  api('POST', `/api/prospects/${state.prospectId}/run`).then(r => ({
+    status: 'PASS',
+    summary: `Audit complete (${r.provider} provider, ${r.dataSource} data, coverage ${Math.round(r.coverage.rate * 100)}%` +
+      `${r.costEUR ? `, ~€${r.costEUR.toFixed(2)}` : ''}). The share link is live.`
+  })));
+window.prospectDelete = (confirmed) => {
+  if (confirmed === undefined) { state.confirmDeleteProspect = true; return render(); }
+  if (!confirmed) { state.confirmDeleteProspect = false; return render(); }
+  act(() => api('DELETE', `/api/prospects/${state.prospectId}`).then(() => {
+    state.view = 'client'; state.prospect = null; state.prospectId = null;
+    return { status: 'PASS', summary: 'Prospect audit deleted.' };
+  }));
+};
 window.closeModal = () => $('#modal-wrap').classList.remove('show');
 
 window.profileDecide = (d) => {
@@ -4247,6 +4356,14 @@ window.profileDecide = (d) => {
 };
 window.promptSetDecide = (d) => act(() => api('POST', `/api/clients/${state.selId}/promptset/decision`, { decision: d }),
   d === 'approve' ? 'Prompt set approved — weekly tracking basis, client-visible (read-only)' : 'Prompt set rejected — next Research run regenerates it');
+// AUR-A10: rejecting an APPROVED set changes the weekly tracking basis, so it
+// arms a confirm step instead of firing on one stray click.
+window.promptSetRejectApproved = (confirmed) => {
+  if (confirmed === undefined) { state.confirmRejectPromptSet = true; return render(); }
+  state.confirmRejectPromptSet = false;
+  if (!confirmed) return render();
+  return promptSetDecide('reject');
+};
 
 window.submitOnboard = async (ev) => {
   ev.preventDefault();
@@ -4260,6 +4377,8 @@ window.submitOnboard = async (ev) => {
       brandVoice: f.brandVoice.value, reviewMode: f.reviewMode.value,
       // deep intake (v1.2) — a company description opens the brand profile gate
       companyDescription: f.companyDescription.value.trim(),
+      // AUR-A11: the trading name branded prompts ask about (A9 seam)
+      brandName: f.brandName.value.trim() || undefined,
       toneOfVoice: f.toneOfVoice.value.trim(),
       brandRules: split(f.brandRules.value),
       audiences: split(f.audiences.value),
@@ -4427,6 +4546,20 @@ function render() {
          ? ` <span class="note-dot" data-testid="note-dot-${esc(c.name)}" title="unread client note">●</span>` : ''}<small>${esc(c.domain)}</small></a>`).join('')
     || '<p class="dim" style="padding:8px">No clients yet.</p>';
 
+  // AUR-J3: prospect audits live in the sidebar below clients — server mode
+  // only, and the demo skeleton has no #prospect-sec at all (the shim has no
+  // prospect routes), so every touch is guarded.
+  const psec = $('#prospect-sec');
+  if (psec) {
+    psec.style.display = IS_DEMO ? 'none' : '';
+    $('#prospect-list').innerHTML = (state.prospects || []).map(pr =>
+      `<a href="#" class="${pr.id === state.prospectId && state.view === 'prospect' ? 'sel' : ''}" data-testid="prospect-link-${esc(pr.domain)}"
+         onclick="selectProspect('${pr.id}');return false">${esc(pr.name)} ${badge(pr.status)}<small>${esc(pr.domain)}</small></a>`).join('')
+      || '<p class="dim" style="padding:4px 8px">No audits yet.</p>';
+  }
+
+  if (state.view === 'prospect-new') return renderProspectNew();
+  if (state.view === 'prospect' && state.prospect) return renderProspect();
   if (state.view === 'onboard' || !state.clients.length) return renderOnboard();
   const c = sel();
   if (!c) return;
@@ -4453,6 +4586,108 @@ function render() {
     <div id="tab-body">${renderTab(c)}</div>`;
 }
 
+// ---------- prospect audit views (AUR-J3) ----------
+
+function renderProspectNew() {
+  $('#content').innerHTML = `
+    <h1>New prospect audit</h1>
+    <p class="dim">The sales wedge: crawl any domain and measure it across the AI engines with no client
+    credentials and no client record. The site is crawled on creation (~10s); <strong>nothing billable runs
+    until you approve the prompt set</strong>.</p>
+    <form class="panel" onsubmit="return submitProspectNew(event)" style="margin-top:14px">
+      <label>Company name</label><input name="name" data-testid="pa-name" required>
+      <label>Domain</label><input name="domain" data-testid="pa-domain" placeholder="prospect.example" required>
+      <label>Niche (labels the report)</label><input name="niche" data-testid="pa-niche" placeholder="e.g. dental care">
+      <label>Seed keywords (comma-separated)</label><input name="keywords" data-testid="pa-keywords" required>
+      <label>Competitor URLs (comma-separated)</label><input name="competitors" data-testid="pa-competitors" required>
+      <label>Brand / trading name (only if it differs from the company name)</label>
+      <input name="brandName" data-testid="pa-brandname">
+      <label>Audiences (comma-separated, sharpens the questions)</label><input name="audiences" data-testid="pa-audiences">
+      <label>Language</label>
+      <select name="primaryLanguage" data-testid="pa-language">
+        <option value="en">English</option>
+        <option value="nl">Nederlands (Dutch)</option>
+      </select>
+      <p style="margin-top:14px"><button class="primary" type="submit" data-testid="pa-submit">Create audit</button></p>
+    </form>`;
+}
+
+function renderProspect() {
+  const pr = state.prospect;
+  const est = pr.estimate || { engines: {}, estimateEUR: 0, capEUR: 0 };
+  const liveEngines = Object.values(est.engines).filter(m => m === 'live').length;
+  const engineList = Object.entries(est.engines).map(([e, mode]) =>
+    `<span style="margin-right:10px">${esc(ENGINE_LABEL[e] || e)} ${mode === 'live'
+      ? '<span class="badge b-PASS">● live</span>' : '<span class="badge b-medium">mock</span>'}</span>`).join('');
+  const crawl = pr.crawl || {};
+  const sc = pr.snapshot && pr.snapshot.scorecard;
+  const month = new Date().toISOString().slice(0, 7);
+  const spent = pr.costLedger && pr.costLedger[month] ? pr.costLedger[month].total : 0;
+
+  $('#content').innerHTML = `
+    <h1 data-testid="prospect-name">${esc(pr.name)} ${badge(pr.status)}</h1>
+    <p class="dim">${esc(pr.domain)} · prospect audit · created ${esc(pr.createdAt.slice(0, 10))}
+      · <a href="#" onclick="logout();return false" style="color:var(--dim)">log out</a></p>
+
+    <h2>Site crawl</h2>
+    ${crawl.live === false
+      ? `<p data-testid="pa-crawl-failed">⚠ Crawl failed: <span class="dim">${esc(crawl.error || 'unknown error')}</span> —
+         engine measurements are unaffected.</p>`
+      : `<p data-testid="pa-crawl">${(crawl.pages || []).length} pages crawled ·
+         robots.txt ${crawl.robotsCheck && crawl.robotsCheck.ok ? 'allows all AI crawlers'
+           : `<span style="color:var(--bad)">BLOCKS ${esc((crawl.robotsCheck && crawl.robotsCheck.blocked || []).join(', '))}</span>`} ·
+         llms.txt ${crawl.llmsTxt && crawl.llmsTxt.present ? 'present' : 'missing'} ·
+         sitemap ${crawl.sitemapFound ? 'found' : 'not found'}</p>`}
+
+    <div class="row" style="margin-top:16px">
+      <h2 style="margin:0">Prompt set</h2>
+      ${badge(pr.promptSet.status)}
+      ${pr.promptSet.status === 'pending_approval' ? `
+        <button class="primary" data-testid="pa-approve" onclick="prospectDecide('approve')">Approve prompt set</button>
+        <button class="danger" data-testid="pa-reject" onclick="prospectDecide('reject')">Reject</button>` : ''}
+    </div>
+    <p class="dim">${pr.promptSet.total} prompts · ${esc(pr.promptSet.generatedFrom)}.
+      ${pr.promptSet.status === 'pending_approval' ? 'This is the gate: the audit spends money only on the exact set you approve.' : ''}
+      ${pr.promptSet.status === 'rejected' ? 'Rejected — delete this audit and recreate it with better keywords/audiences.' : ''}</p>
+    ${pr.promptSet.groups.map(g => `
+      <div class="card" style="margin-bottom:8px" data-testid="pa-group-${esc(g.intent)}">
+        <h3>${esc(g.intent)} (${g.prompts.length})</h3>
+        ${g.prompts.map(x => `<p class="dim">“${esc(x.text)}”</p>`).join('')}
+      </div>`).join('')}
+
+    <h2>Engines &amp; cost</h2>
+    <p data-testid="pa-engines">${engineList}</p>
+    <p class="dim" data-testid="pa-estimate">${liveEngines
+      ? `Estimated live cost ~€${est.estimateEUR.toFixed(2)} · hard cap €${est.capEUR.toFixed(2)} per audit (AUREVA_AUDIT_COST_CAP).`
+      : 'No engine credentials configured — the audit would run fully simulated (labelled as such everywhere).'}
+      ${spent ? ` Spent: ~€${spent.toFixed(2)}.` : ''}</p>
+
+    ${pr.status === 'ready' ? `
+      <p style="margin-top:10px">
+        <button class="primary" data-testid="pa-run" onclick="prospectRun()">Run audit now</button>
+        <span class="dim">one-shot — ${liveEngines ? `runs ${liveEngines} live engine(s), takes minutes, spends up to the cap`
+          : 'zero credentials, runs instantly as labelled simulation'}</span></p>` : ''}
+
+    ${pr.status === 'complete' && sc ? `
+      <h2>Results ${pr.snapshot.dataSource === 'live' ? '' : `<span class="badge b-medium" data-testid="pa-datasource">${esc(pr.snapshot.dataSource)} data</span>`}</h2>
+      <div class="cards" style="margin-bottom:10px">
+        <div class="card"><h3>Visibility</h3><p style="min-height:0;font-size:22px;color:var(--accent)">${Math.round(sc.visibility * 100)}%</p></div>
+        <div class="card"><h3>Link Rate</h3><p style="min-height:0;font-size:22px;color:var(--accent)">${sc.visibility > 0 ? Math.round(sc.linkRate * 100) + '%' : '—'}</p></div>
+        ${sc.branded && sc.branded.promptCount ? `<div class="card"><h3>Branded visibility</h3><p style="min-height:0;font-size:22px;color:var(--accent)">${Math.round(sc.branded.visibility * 100)}%</p></div>` : ''}
+        <div class="card"><h3>Coverage</h3><p style="min-height:0;font-size:22px">${Math.round(pr.run.coverage.rate * 100)}%</p></div>
+      </div>
+      <p data-testid="pa-share">Shareable report:
+        <a href="/prospect/${esc(pr.shareToken)}" target="_blank" style="color:var(--accent2)" data-testid="pa-report-link">/prospect/${esc(pr.shareToken)} ↗</a></p>
+      <p class="dim">Client-facing prose in the report is a clearly marked placeholder — Sami's copy pack fills it before this goes in front of a prospect.</p>` : ''}
+
+    <h2>Danger zone</h2>
+    ${state.confirmDeleteProspect ? `
+      <p><span class="dim">Deletes the audit and its share link (raw stored answers are kept).</span>
+        <button class="danger" data-testid="pa-delete-confirm" onclick="prospectDelete(true)">Confirm delete</button>
+        <button data-testid="pa-delete-cancel" onclick="prospectDelete(false)">Cancel</button></p>` : `
+      <p><button class="danger" data-testid="pa-delete" onclick="prospectDelete()">Delete audit…</button></p>`}`;
+}
+
 function renderOnboard() {
   $('#content').innerHTML = `
     <h1>Onboard a new client</h1>
@@ -4472,6 +4707,8 @@ function renderOnboard() {
       <h2>Deep intake — brand profile (fill this in for the full onboarding gate)</h2>
       <label>Company description (in the client's words)</label>
       <textarea name="companyDescription" data-testid="ob-description" rows="3" placeholder="What the company does, for whom, and what makes it different"></textarea>
+      <label>Brand / trading name (only if it differs from the client name — branded prompts ask about this)</label>
+      <input name="brandName" data-testid="ob-brandname" placeholder="e.g. Aureva for Aureva SEO B.V.">
       <label>Tone of voice</label><input name="toneOfVoice" data-testid="ob-tone" placeholder="e.g. geruststellend en professioneel, geen jargon">
       <label>Brand rules (comma-separated do/don'ts)</label><input name="brandRules" data-testid="ob-rules" placeholder="e.g. nooit medische claims zonder bron">
       <label>Target audiences (comma-separated)</label><input name="audiences" data-testid="ob-audiences" placeholder="e.g. angstige patiënten, ouders met kinderen">
@@ -4528,6 +4765,8 @@ function renderProfile(c) {
       </div>` : `<p class="dim">${p.autoApproved ? 'Auto-approved (minimal intake).' : 'Approved — content work unblocked.'}</p>`}
     <div class="card" style="margin-bottom:10px" data-testid="profile-card">
       <p><strong>Company:</strong> ${esc(p.companyDescription)}</p>
+      <p data-testid="profile-brandname"><strong>Brand name (branded prompts ask about this):</strong>
+        ${p.brandName ? esc(p.brandName) : '<span class="dim">not set — falls back to the client name</span>'}</p>
       <p><strong>Tone of voice:</strong> ${esc(p.toneOfVoice)}</p>
       <p><strong>Brand rules:</strong> ${p.brandRules.length ? p.brandRules.map(esc).join(' · ') : '<span class="dim">none provided</span>'}</p>
       <p><strong>Languages:</strong> ${p.languages.map(esc).join(' + ')} (writer produces <strong>${esc(p.primaryLanguage)}</strong>)</p>
@@ -4542,6 +4781,11 @@ function renderProfile(c) {
       ${ps && ps.status === 'pending_approval' ? `
         <button class="primary" data-testid="promptset-approve" onclick="promptSetDecide('approve')">Approve prompt set</button>
         <button class="danger" data-testid="promptset-reject" onclick="promptSetDecide('reject')">Reject</button>` : ''}
+      ${ps && ps.status === 'approved' ? (state.confirmRejectPromptSet ? `
+        <span class="dim" data-testid="promptset-reject-note">This drops the weekly tracking basis — the next Research run regenerates a new version for re-approval.</span>
+        <button class="danger" data-testid="promptset-reject-confirm" onclick="promptSetRejectApproved(true)">Confirm reject</button>
+        <button data-testid="promptset-reject-cancel" onclick="promptSetRejectApproved(false)">Cancel</button>` : `
+        <button class="danger" data-testid="promptset-reject" onclick="promptSetRejectApproved()">Reject approved set…</button>`) : ''}
     </div>
     ${!ps ? '<p class="dim" data-testid="promptset-empty">Generated by the Research agent from this profile — run Research (after approving the profile).</p>' : `
       <p class="dim" data-testid="promptset-meta">${ps.total} prompts · ${ps.groups.length} intent groups · from ${esc(ps.generatedFrom)}.
